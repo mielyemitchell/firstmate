@@ -42,8 +42,8 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
-# shellcheck source=bin/fm-tmux-lib.sh
-. "$SCRIPT_DIR/fm-tmux-lib.sh"
+# shellcheck source=bin/fm-terminal-lib.sh
+. "$SCRIPT_DIR/fm-terminal-lib.sh"
 
 ID=${1:-}
 [ -n "$ID" ] || { echo "usage: fm-crew-state.sh <id>" >&2; exit 2; }
@@ -72,6 +72,8 @@ meta_value() {  # <key>
 
 WT=$(meta_value worktree)
 WIN=$(meta_value window)
+BACKEND=$(meta_value terminal_backend)
+[ -n "$BACKEND" ] || BACKEND=tmux
 KIND=$(meta_value kind)
 [ -n "$KIND" ] || KIND=ship
 
@@ -119,7 +121,10 @@ LOG_VERB=$(log_verb_of "$LOG_LINE")
 # shell - so a finished crew whose window has closed still reports its run-step
 # state (e.g. done) instead of being masked as unknown.
 pane_readable() {  # <target>
-  tmux display-message -p -t "$1" '#{pane_id}' >/dev/null 2>&1
+  case "$BACKEND" in
+    cmux) fm_terminal_read "fm-$ID" 1 >/dev/null 2>&1 ;;
+    *) tmux display-message -p -t "$1" '#{pane_id}' >/dev/null 2>&1 ;;
+  esac
 }
 
 # --- no-mistakes run lookup (authoritative when a run matches this branch) --
@@ -350,13 +355,32 @@ fi
 # liveness, so a finished-but-pane-closed crew never reaches here. Down here there
 # is no run to consult, so a dead/unreadable window means the crew is gone: report
 # unknown rather than trusting a possibly-stale status log as the current state.
-[ -n "$WIN" ] || emit unknown none "no window recorded"
-pane_readable "$WIN" || emit unknown none "window gone: $WIN"
+if [ "$BACKEND" = cmux ]; then
+  TARGET="fm-$ID"
+else
+  [ -n "$WIN" ] || emit unknown none "no window recorded"
+  TARGET="$WIN"
+fi
+pane_readable "$TARGET" || emit unknown none "terminal gone: $TARGET"
 
 # Secondmates idle on their own watcher (idle pane = healthy), so the busy
 # signature is not meaningful for them; read their state from the status log only.
-if [ "$KIND" != secondmate ] && fm_pane_is_busy "$WIN"; then
-  emit working pane "harness busy"
+if [ "$KIND" != secondmate ]; then
+  if [ "$BACKEND" = cmux ]; then
+    fm_terminal_busy "fm-$ID" && emit working pane "harness busy"
+    SCREEN_TAIL=$(fm_terminal_read "fm-$ID" 80 2>/dev/null || true)
+    if printf '%s\n' "$SCREEN_TAIL" | grep -qiE '(^|[^[:alpha:]])(failed:|FAILED:)'; then
+      emit failed pane "failure marker in terminal"
+    fi
+    if printf '%s\n' "$SCREEN_TAIL" | grep -qiE '(^|[^[:alpha:]])(needs-decision:|NEEDS_DECISION:)'; then
+      emit parked pane "needs-decision marker in terminal"
+    fi
+    if printf '%s\n' "$SCREEN_TAIL" | grep -qiE '(^|[^[:alpha:]])(done:|ready in branch|checks green)'; then
+      emit "done" pane "done marker in terminal"
+    fi
+  elif fm_pane_is_busy "$WIN"; then
+    emit working pane "harness busy"
+  fi
 fi
 
 if [ -n "$LOG_VERB" ]; then

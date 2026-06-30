@@ -34,33 +34,20 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
-# shellcheck source=bin/fm-tmux-lib.sh
-. "$SCRIPT_DIR/fm-tmux-lib.sh"
+# shellcheck source=bin/fm-terminal-lib.sh
+. "$SCRIPT_DIR/fm-terminal-lib.sh"
 # shellcheck source=bin/fm-marker-lib.sh
 . "$SCRIPT_DIR/fm-marker-lib.sh"
 
 "$SCRIPT_DIR/fm-guard.sh" || true
 
-resolve() {
-  case "$1" in
-    *:*) echo "$1" ;;
-    fm-*)
-      meta="$STATE/${1#fm-}.meta"
-      if [ ! -f "$meta" ]; then
-        echo "error: no metadata for $1 in $STATE; pass session:window to target a window outside this firstmate home" >&2
-        exit 1
-      fi
-      window=$(grep '^window=' "$meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
-      [ -n "$window" ] || { echo "error: no window recorded in $meta" >&2; exit 1; }
-      echo "$window"
-      ;;
-    *) tmux list-windows -a -F '#{session_name}:#{window_name}' | grep -m1 ":$1\$" \
-         || { echo "error: no window named $1" >&2; exit 1; } ;;
-  esac
-}
-
 RAW_TARGET=$1
-T=$(resolve "$1")
+BACKEND=$(fm_terminal_target_backend "$RAW_TARGET")
+if [ "$BACKEND" = tmux ]; then
+  T=$(fm_terminal_resolve_tmux "$RAW_TARGET")
+else
+  T=$RAW_TARGET
+fi
 shift
 
 # Mark a from-firstmate -> secondmate request. Only a bare `fm-<id>` target,
@@ -93,7 +80,7 @@ case "$RAW_TARGET" in
 esac
 
 if [ "${1:-}" = "--key" ]; then
-  tmux send-keys -t "$T" "$2"
+  fm_terminal_send_key "$RAW_TARGET" "$2"
 else
   # Slash commands open a completion popup in some TUIs (verified on codex);
   # submitting too fast selects nothing, so give the popup time to settle before
@@ -112,19 +99,26 @@ else
   esac
   retries=${FM_SEND_RETRIES:-3}
   sleep_s=${FM_SEND_SLEEP:-0.4}
-  # Type once, submit, verify. Lenient: only a positively-confirmed swallow
-  # (text still in the composer) is an error; an unreadable pane is assumed sent.
-  verdict=$(fm_tmux_submit_core "$T" "$MARK_PREFIX$*" "$retries" "$sleep_s" "$settle")
-  case "$verdict" in
-    pending)
-      echo "error: text not submitted to $T (Enter swallowed; text left in composer)" >&2
-      exit 1
-      ;;
-    send-failed)
-      echo "error: text not sent to $T (tmux send-keys failed)" >&2
-      exit 1
-      ;;
-  esac
+  if [ "$BACKEND" = cmux ]; then
+    ws=$(fm_terminal_cmux_workspace "$RAW_TARGET")
+    surface=$(fm_terminal_cmux_surface "$RAW_TARGET")
+    cmux send --workspace "$ws" --surface "$surface" "$MARK_PREFIX$*\n" \
+      || { echo "error: text not sent to $RAW_TARGET (cmux send failed)" >&2; exit 1; }
+  else
+    # Type once, submit, verify. Lenient: only a positively-confirmed swallow
+    # (text still in the composer) is an error; an unreadable pane is assumed sent.
+    verdict=$(fm_tmux_submit_core "$T" "$MARK_PREFIX$*" "$retries" "$sleep_s" "$settle")
+    case "$verdict" in
+      pending)
+        echo "error: text not submitted to $T (Enter swallowed; text left in composer)" >&2
+        exit 1
+        ;;
+      send-failed)
+        echo "error: text not sent to $T (tmux send-keys failed)" >&2
+        exit 1
+        ;;
+    esac
+  fi
   # Submit landed (verdict was not pending/send-failed). The cleared composer only
   # proves the text was submitted; the harness still needs a beat to spin up the
   # turn before its busy footer shows. Pause so an immediate peek catches the

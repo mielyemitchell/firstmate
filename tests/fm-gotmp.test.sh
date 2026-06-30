@@ -43,8 +43,10 @@ make_fake_root() {
   local id=$1 tasktmp=$2
   local fake="$TMP_ROOT/$id"
   mkdir -p "$fake/bin" "$fake/state"
-  # Symlink the REAL teardown so the test exercises actual code, not a copy.
+  # Symlink the REAL teardown and terminal libs so the test exercises actual code, not a copy.
   ln -s "$TEARDOWN" "$fake/bin/fm-teardown.sh"
+  ln -s "$ROOT/bin/fm-terminal-lib.sh" "$fake/bin/fm-terminal-lib.sh"
+  ln -s "$ROOT/bin/fm-tmux-lib.sh" "$fake/bin/fm-tmux-lib.sh"
   # fm-guard.sh: stub (teardown calls it with `|| true`).
   cat > "$fake/bin/fm-guard.sh" <<'SH'
 #!/usr/bin/env bash
@@ -136,6 +138,8 @@ test_teardown_skips_gracefully_without_tasktmp() {
   local fake="$TMP_ROOT/$id-root"
   mkdir -p "$fake/bin" "$fake/state"
   ln -s "$TEARDOWN" "$fake/bin/fm-teardown.sh"
+  ln -s "$ROOT/bin/fm-terminal-lib.sh" "$fake/bin/fm-terminal-lib.sh"
+  ln -s "$ROOT/bin/fm-tmux-lib.sh" "$fake/bin/fm-tmux-lib.sh"
   cat > "$fake/bin/fm-guard.sh" <<'SH'
 #!/usr/bin/env bash
 exit 0

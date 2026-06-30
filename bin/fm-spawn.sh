@@ -64,6 +64,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-ff-lib.sh"
 # shellcheck source=bin/fm-config-inherit-lib.sh
 . "$SCRIPT_DIR/fm-config-inherit-lib.sh"
+# shellcheck source=bin/fm-terminal-lib.sh
+. "$SCRIPT_DIR/fm-terminal-lib.sh"
 # Skip the watcher guard when re-exec'd for one pair of a batch (FM_SPAWN_NO_GUARD is
 # set by the batch loop below), so the guard runs once for the batch, not once per pair.
 [ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
@@ -490,6 +492,117 @@ else
   BRIEF="$DATA/$ID/brief.md"
 fi
 [ -f "$BRIEF" ] || { echo "error: no brief at $BRIEF" >&2; exit 1; }
+
+spawn_cmux_and_exit() {
+  command -v cmux >/dev/null 2>&1 || { echo "error: terminal backend is cmux but cmux is not on PATH" >&2; exit 1; }
+  cmux ping >/dev/null 2>&1 || { echo "error: terminal backend is cmux but cmux is not reachable" >&2; exit 1; }
+  command -v python3 >/dev/null 2>&1 || { echo "error: cmux backend needs python3 to parse cmux identify output" >&2; exit 1; }
+
+  local identify caller_ws caller_surface lease_out cmux_out surface pane task_title
+  identify=$(cmux identify --json 2>/dev/null) || { echo "error: cmux identify failed; run firstmate from inside cmux or set terminal-backend=tmux" >&2; exit 1; }
+  caller_ws=$(printf '%s\n' "$identify" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("caller",{}).get("workspace_ref", ""))')
+  caller_surface=$(printf '%s\n' "$identify" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("caller",{}).get("surface_ref", ""))')
+  [ -n "$caller_ws" ] || { echo "error: cmux caller workspace could not be resolved" >&2; exit 1; }
+
+  lease_out=$(cd "$PROJ_ABS" && treehouse get --lease --lease-holder "$ID") || { echo "error: treehouse lease failed for $PROJ_ABS" >&2; exit 1; }
+  WT=$(printf '%s\n' "$lease_out" | grep '^/' | tail -1 || true)
+  [ -n "$WT" ] || WT=$(printf '%s\n' "$lease_out" | tail -1)
+  [ -d "$WT" ] || { echo "error: treehouse lease did not return a worktree path; output: $lease_out" >&2; exit 1; }
+
+  wt_real=
+  wt_real=$(cd "$WT" 2>/dev/null && pwd -P) || wt_real=
+  proj_real=
+  proj_real=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P) || proj_real=
+  wt_top=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null || true)
+  wt_top_real=
+  wt_top_real=$(cd "$wt_top" 2>/dev/null && pwd -P) || wt_top_real=
+  if [ -z "$wt_real" ] || [ -z "$wt_top_real" ] || [ "$wt_real" != "$wt_top_real" ] || [ "$wt_real" = "$proj_real" ]; then
+    echo "error: treehouse lease did not yield an isolated worktree (resolved '$WT'; worktree root '${wt_top:-none}'; primary '$PROJ_ABS')" >&2
+    ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
+    exit 1
+  fi
+
+  task_title="fm-$ID"
+  if [ -n "$caller_surface" ]; then
+    cmux_out=$(cmux new-split right --workspace "$caller_ws" --surface "$caller_surface" --focus false 2>&1) || {
+      echo "error: cmux split failed after leasing worktree $WT: $cmux_out" >&2
+      ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
+      exit 1
+    }
+  else
+    cmux_out=$(cmux new-pane --type terminal --direction right --workspace "$caller_ws" --focus false 2>&1) || {
+      echo "error: cmux pane failed after leasing worktree $WT: $cmux_out" >&2
+      ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
+      exit 1
+    }
+  fi
+  surface=$(printf '%s\n' "$cmux_out" | grep -o 'surface:[0-9][0-9]*' | tail -1 || true)
+  if [ -z "$surface" ]; then
+    echo "error: cmux did not report a surface after leasing worktree $WT: $cmux_out" >&2
+    ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
+    exit 1
+  fi
+  pane=$(for p in $(cmux list-panes --workspace "$caller_ws" 2>/dev/null | grep -o 'pane:[0-9][0-9]*'); do cmux list-pane-surfaces --workspace "$caller_ws" --pane "$p" 2>/dev/null | grep -q "${surface}" && { echo "$p"; break; }; done)
+
+  TASK_TMP="/tmp/fm-$ID"
+  mkdir -p "$TASK_TMP/gotmp" "$STATE"
+  STATE_REAL=$(cd "$STATE" && pwd -P)
+  TURNEND="$STATE_REAL/$ID.turn-ended"
+  cat > "$STATE/$ID.pi-ext.ts" <<EOF
+// Firstmate turn-end signal; written by fm-spawn.
+import { execFile } from "node:child_process";
+export default function (pi: any) {
+  pi.on("turn_end", () => execFile("touch", ["$TURNEND"]));
+}
+EOF
+
+  PROJ_NAME=$(basename "$PROJ_ABS")
+  read -r MODE YOLO <<EOF
+$("$FM_ROOT/bin/fm-project-mode.sh" "$PROJ_NAME")
+EOF
+
+  sq_brief=$(shell_quote "$BRIEF")
+  sq_turnend=$(shell_quote "$TURNEND")
+  sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
+  local cmux_modelflag cmux_effortflag
+  cmux_modelflag=$(model_flag_for_harness "$HARNESS" "$MODEL")
+  cmux_effortflag=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
+  LAUNCH=${LAUNCH//__MODELFLAG__/$cmux_modelflag}
+  LAUNCH=${LAUNCH//__EFFORTFLAG__/$cmux_effortflag}
+  LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
+  LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
+  LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
+
+  {
+    echo "terminal_backend=cmux"
+    echo "workspace=$caller_ws"
+    [ -n "$pane" ] && echo "pane=$pane"
+    echo "surface=$surface"
+    echo "worktree=$WT"
+    echo "project=$PROJ_ABS"
+    echo "harness=$HARNESS"
+    echo "kind=$KIND"
+    echo "mode=$MODE"
+    echo "yolo=$YOLO"
+    echo "tasktmp=$TASK_TMP"
+    echo "model=${MODEL:-default}"
+    echo "effort=${EFFORT:-default}"
+  } > "$STATE/$ID.meta"
+
+  launch_line="cd $(shell_quote "$WT") && export GOTMPDIR=$(shell_quote "$TASK_TMP/gotmp") && $LAUNCH"
+  cmux rename-tab --workspace "$caller_ws" --surface "$surface" "$task_title" >/dev/null 2>&1 || true
+  cmux send --workspace "$caller_ws" --surface "$surface" "$launch_line\n" || {
+    echo "error: cmux launch send failed; workspace=$caller_ws surface=$surface worktree=$WT" >&2
+    exit 1
+  }
+  echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO terminal=cmux workspace=$caller_ws surface=$surface worktree=$WT"
+  exit 0
+}
+
+TERMINAL_BACKEND=$(fm_terminal_config_backend) || exit 1
+if [ "$KIND" != secondmate ] && [ "$TERMINAL_BACKEND" = cmux ]; then
+  spawn_cmux_and_exit
+fi
 
 # Same session when firstmate already runs inside tmux; dedicated session otherwise.
 if [ -n "${TMUX:-}" ]; then
