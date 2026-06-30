@@ -1,0 +1,248 @@
+# cmux terminal backend spec
+
+## What
+
+Add a terminal backend boundary to firstmate so workers can run in visible cmux panes while keeping the existing tmux implementation as the default fallback.
+
+First slice: cmux mode can spawn one visible ship/scout worker in an isolated treehouse worktree, send it the brief, read its screen, detect terminal outcomes, and clean it up safely. Secondmates stay on the existing tmux path until a later slice.
+
+## Context
+
+firstmate currently assumes tmux in its core lifecycle:
+
+- `bin/fm-spawn.sh` creates tmux windows, runs `treehouse get`, launches the harness, and records `window=<session:window>`.
+- `bin/fm-send.sh` sends prompts with tmux key injection.
+- `bin/fm-peek.sh` reads panes with tmux capture.
+- `bin/fm-watch.sh` detects stale/busy workers from tmux pane text.
+- `bin/fm-teardown.sh` kills tmux windows and returns treehouse worktrees.
+
+Manual smoke tests on 2026-06-29 proved cmux has the needed primitives:
+
+- visible worker panes can launch `pi` directly;
+- `cmux send` can steer an idle worker;
+- `cmux read-screen` can read worker output;
+- `cmux send-key ctrl+c` can interrupt a long command;
+- parallel cmux workers can use separate treehouse worktrees and commit safely;
+- cleanup can return treehouse worktrees, close surfaces, and preserve committed branches.
+
+## Requirements
+
+- Preserve existing tmux behavior unless cmux mode is explicitly selected or safely auto-detected.
+- Add a backend boundary instead of scattering cmux conditionals through every script.
+- Support at least these backend operations:
+  - spawn surface/window in a project/worktree path;
+  - send literal text and submit it reliably (`cmux send` requires a trailing `\n` / `\r` to press Enter);
+  - send special keys, especially `ctrl+c` / Escape / Enter where supported;
+  - read recent screen text;
+  - detect whether the worker is busy from footer text;
+  - close the worker surface/window;
+  - store a durable target handle in `state/<id>.meta`.
+- For cmux mode, record enough metadata to recover after firstmate restarts: `terminal_backend=cmux`, `workspace=...`, `surface=...`, `pane=...`, `worktree=...`.
+- All scripts that read meta must tolerate cmux tasks without `window=`; today some paths assume `window=` exists under `set -e`, so target resolution must move behind the backend boundary before cmux meta is written.
+- For tmux mode, continue to record existing `window=<session:window>` and keep old scripts compatible.
+- Use `treehouse get --lease --lease-holder <id>` for cmux worker acquisition so spawn can get the worktree path without an interactive subshell.
+- Return cmux worktrees with `treehouse return --force <worktree>` only after the same landed/dirty safety checks already used by teardown.
+- If cmux CLI/socket is unavailable, fail clearly or fall back to tmux depending on config.
+
+## Design
+
+### Config
+
+Add a local config knob:
+
+```text
+config/terminal-backend
+```
+
+Allowed values:
+
+- `tmux` — current behavior.
+- `cmux` — visible cmux workers.
+- absent / `auto` — use cmux only when `CMUX_WORKSPACE_ID` and `cmux ping` are available; otherwise tmux.
+
+Add optional local layout config:
+
+```text
+config/cmux-layout
+```
+
+Allowed values:
+
+- `splits` — visible split per worker.
+- `tabs` — one crew pane with worker tabs.
+- `hybrid` — split layout up to threshold, then tab overflow.
+- absent / `auto` — Mielye default: visible splits for 1–3 workers, hybrid for 4+.
+
+### Backend library
+
+Add a new backend abstraction, likely:
+
+```text
+bin/fm-terminal-lib.sh
+bin/fm-terminal-tmux.sh
+bin/fm-terminal-cmux.sh
+```
+
+The public functions should be small and shell-friendly:
+
+```sh
+fm_terminal_backend_resolve
+fm_terminal_spawn <id> <cwd> <title> <launch-command>
+fm_terminal_send <id-or-target> <text>
+fm_terminal_send_key <id-or-target> <key>
+fm_terminal_read <id-or-target> <lines>
+fm_terminal_busy <id-or-target>
+fm_terminal_close <id-or-target>
+```
+
+Use shell-safe function names; avoid pseudo-subcommands in function names unless implemented as one dispatcher function with an explicit subcommand argument.
+
+Existing scripts call the generic functions. Backend files own tmux/cmux command details.
+
+Target compatibility rules:
+
+- Bare `fm-<id>` resolves through `state/<id>.meta` and chooses the backend recorded there.
+- Explicit `session:window` remains a tmux escape hatch for existing operators/tests.
+- cmux targeting uses `workspace + surface`; pane is recorded for layout/recovery, but `surface` is the normal send/read/close target.
+
+### cmux spawn shape
+
+For cmux worker spawn:
+
+1. Resolve current workspace from `CMUX_WORKSPACE_ID` or `cmux identify --json`.
+2. Lease worktree:
+   ```sh
+   WT=$(cd "$PROJECT" && treehouse get --lease --lease-holder "$ID")
+   ```
+3. Create worker pane/surface based on layout policy, capturing the returned `workspace`, `pane`, and `surface` refs.
+4. Start the harness in `WT` with the generated launch command by sending a single setup command to the new surface, for example `cd <WT> && export GOTMPDIR=... && <launch>\n`. cmux split/surface commands do not take `cwd` / `command` flags the way `new-workspace` does.
+5. Record meta only after the worktree and surface exist and launch setup has been sent:
+   ```text
+   terminal_backend=cmux
+   workspace=workspace:N
+   pane=pane:N
+   surface=surface:N
+   worktree=/...
+   project=/...
+   harness=pi|claude|codex|...
+   kind=ship|scout
+   mode=...
+   yolo=...
+   tasktmp=/tmp/fm-<id>
+   ```
+
+### Layout policy
+
+Mielye default:
+
+- 1–3 active workers: create visible splits, so workers are watchable at once.
+- 4+ active workers: use hybrid overflow, preserving firstmate visibility and avoiding pane chaos.
+
+Implementation can start simpler:
+
+- first cmux slice may create one right-side worker pane only;
+- first slice should explicitly mark layout threshold support as not implemented yet;
+- second slice adds split counting + hybrid overflow.
+
+### Outcome detection
+
+Do not depend only on visual text long-term. Preserve status-file signaling where harness hooks already exist.
+
+For cmux screen-reading, detect public markers as fallback:
+
+- `done:` / `ready in branch` / `checks green`
+- `needs-decision:` / `NEEDS_DECISION:`
+- `blocked:`
+- `failed:` / `FAILED:`
+
+Busy detection can reuse the current busy footer patterns:
+
+- Claude/Codex: `esc to interrupt`
+- Pi: `Working...`
+- Grok: `Ctrl+c:cancel`
+
+### Cleanup
+
+cmux teardown must preserve the current safety invariant:
+
+- never close/return a worker with uncommitted work unless explicitly forced;
+- never discard committed work not merged/pushed/landed;
+- close cmux surface only after worktree safety checks pass;
+- if close-surface fails, leave metadata and report the surface handle.
+
+## Decisions
+
+- Use backend abstraction, not a one-off cmux fork.
+- Keep tmux fallback.
+- Use `treehouse get --lease` for cmux instead of interactive `treehouse get`.
+- Default UX is visible splits for up to 3 workers, hybrid for 4+.
+- First implementation slice should not attempt every firstmate feature at once.
+
+## Invariants
+
+- A worker must never edit the primary project checkout directly.
+- A worker must always run in a distinct treehouse worktree for project work.
+- Teardown must refuse dirty or unlanded work unless forced by explicit user approval.
+- Existing tmux behavior and tests must keep passing.
+- Meta files must contain enough target information for recovery.
+- cmux focus should not be stolen unless the user explicitly asks; use `--focus false` where supported.
+
+## Error behavior
+
+- If `config/terminal-backend=cmux` but `cmux ping` fails, spawn exits with a clear error and does not create a task meta file.
+- If cmux pane creation succeeds but harness launch fails, keep the pane open and report the surface handle for inspection.
+- If treehouse lease succeeds but cmux spawn fails before meta is written, return the lease or clearly report the leased worktree path.
+- If cmux surface creation succeeds but later setup fails, preserve enough temporary state in the error output for manual cleanup (`workspace`, `surface`, `worktree`).
+- If screen read fails, report `unknown` rather than guessing worker state.
+- If cleanup cannot close the cmux surface, preserve metadata and report manual cleanup instructions.
+
+## Acceptance criteria
+
+- Given `config/terminal-backend=tmux`, when a sandbox worker is spawned, then existing tmux window behavior still works and current tests pass.
+- Given `config/terminal-backend=cmux` inside cmux, when a sandbox worker is spawned, then a visible cmux surface opens and runs the harness in a leased treehouse worktree.
+- Given a cmux worker is idle, when firstmate sends a follow-up instruction, then the worker receives it and acts on it.
+- Given a cmux worker has output, when firstmate peeks/reads it, then recent screen text is returned without using tmux.
+- Given a cmux worker prints `needs-decision:` or `FAILED:`, when supervision reads the surface, then the state is classified as needing attention or failed.
+- Given a cmux worker runs a long foreground command, when firstmate sends interrupt, then the command stops and the worker surface remains usable.
+- Given a cmux worker has uncommitted changes, when teardown runs without force, then cleanup is refused and the surface stays open.
+- Given a cmux worker has committed work that is merged/landed, when teardown runs, then treehouse returns the worktree and cmux closes the surface.
+
+Later-slice layout acceptance:
+
+- Given 1–3 live cmux workers, when new workers spawn, then they appear as visible splits.
+- Given 4+ live cmux workers, when another worker spawns, then overflow uses hybrid/tab behavior instead of unlimited random splits.
+
+## Verification loop
+
+Cheapest proof for first slice:
+
+1. Run existing firstmate shell tests.
+2. Run a tmux sandbox spawn to prove fallback was not broken.
+3. Run cmux sandbox smoke:
+   - spawn worker visibly;
+   - send prompt;
+   - read screen;
+   - detect done/failure/needs-decision marker;
+   - interrupt long command;
+   - teardown safely.
+4. Verify branch/commit preservation from the primary sandbox repo after cleanup.
+
+## Testing strategy
+
+- Unit-test backend target parsing and config resolution with shell tests.
+- Stub `cmux` in tests for spawn/send/read/close command formation.
+- Keep existing tmux tests untouched and passing.
+- Add one manual cmux integration checklist because full cmux UI behavior needs a live cmux app/socket.
+
+## Out of scope for first slice
+
+- Replacing every watcher path in one PR.
+- Full secondmate cmux support; secondmate spawn remains tmux-only in the first slice even when `config/terminal-backend=cmux`.
+- X mode / public reply integration.
+- Automatic PR creation or no-mistakes changes.
+- Polished status UI, badges, or notifications beyond basic surface naming/flash.
+- Removing tmux.
+
+## Handoff
+
+Next: `single-task-build` for the first vertical slice: backend config + cmux spawn/send/read/cleanup for one sandbox worker, preserving tmux fallback.
