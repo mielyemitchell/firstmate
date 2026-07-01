@@ -493,6 +493,12 @@ else
 fi
 [ -f "$BRIEF" ] || { echo "error: no brief at $BRIEF" >&2; exit 1; }
 
+# Spawn a worker into a cmux surface and exit. For a ship/scout crewmate this leases
+# an isolated treehouse worktree; for a secondmate (kind=secondmate) it launches in
+# the persistent firstmate home (PROJ_ABS/WT already resolved above, with the
+# pre-launch home fast-forward and inheritable-config propagation already applied) and
+# never leases a worktree. Only the terminal changes vs the tmux secondmate path; every
+# other secondmate invariant is preserved (Phase B slice 3).
 spawn_cmux_and_exit() {
   command -v cmux >/dev/null 2>&1 || { echo "error: terminal backend is cmux but cmux is not on PATH" >&2; exit 1; }
   cmux ping >/dev/null 2>&1 || { echo "error: terminal backend is cmux but cmux is not reachable" >&2; exit 1; }
@@ -507,22 +513,26 @@ spawn_cmux_and_exit() {
   caller_surface=$(printf '%s\n' "$identify" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("caller",{}).get("surface_ref", ""))')
   [ -n "$caller_ws" ] || { echo "error: cmux caller workspace could not be resolved" >&2; exit 1; }
 
-  lease_out=$(cd "$PROJ_ABS" && treehouse get --lease --lease-holder "$ID") || { echo "error: treehouse lease failed for $PROJ_ABS" >&2; exit 1; }
-  WT=$(printf '%s\n' "$lease_out" | grep '^/' | tail -1 || true)
-  [ -n "$WT" ] || WT=$(printf '%s\n' "$lease_out" | tail -1)
-  [ -d "$WT" ] || { echo "error: treehouse lease did not return a worktree path; output: $lease_out" >&2; exit 1; }
+  if [ "$KIND" != secondmate ]; then
+    # Crewmate/scout: lease an isolated treehouse worktree. A secondmate skips this
+    # entirely - it runs in its persistent home (WT already == PROJ_ABS == home).
+    lease_out=$(cd "$PROJ_ABS" && treehouse get --lease --lease-holder "$ID") || { echo "error: treehouse lease failed for $PROJ_ABS" >&2; exit 1; }
+    WT=$(printf '%s\n' "$lease_out" | grep '^/' | tail -1 || true)
+    [ -n "$WT" ] || WT=$(printf '%s\n' "$lease_out" | tail -1)
+    [ -d "$WT" ] || { echo "error: treehouse lease did not return a worktree path; output: $lease_out" >&2; exit 1; }
 
-  wt_real=
-  wt_real=$(cd "$WT" 2>/dev/null && pwd -P) || wt_real=
-  proj_real=
-  proj_real=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P) || proj_real=
-  wt_top=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null || true)
-  wt_top_real=
-  wt_top_real=$(cd "$wt_top" 2>/dev/null && pwd -P) || wt_top_real=
-  if [ -z "$wt_real" ] || [ -z "$wt_top_real" ] || [ "$wt_real" != "$wt_top_real" ] || [ "$wt_real" = "$proj_real" ]; then
-    echo "error: treehouse lease did not yield an isolated worktree (resolved '$WT'; worktree root '${wt_top:-none}'; primary '$PROJ_ABS')" >&2
-    ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
-    exit 1
+    wt_real=
+    wt_real=$(cd "$WT" 2>/dev/null && pwd -P) || wt_real=
+    proj_real=
+    proj_real=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P) || proj_real=
+    wt_top=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null || true)
+    wt_top_real=
+    wt_top_real=$(cd "$wt_top" 2>/dev/null && pwd -P) || wt_top_real=
+    if [ -z "$wt_real" ] || [ -z "$wt_top_real" ] || [ "$wt_real" != "$wt_top_real" ] || [ "$wt_real" = "$proj_real" ]; then
+      echo "error: treehouse lease did not yield an isolated worktree (resolved '$WT'; worktree root '${wt_top:-none}'; primary '$PROJ_ABS')" >&2
+      ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
+      exit 1
+    fi
   fi
 
   task_title="fm-$ID"
@@ -530,14 +540,14 @@ spawn_cmux_and_exit() {
   # overflow for the 4th+ under auto/hybrid; explicit splits/tabs honored. Never
   # steals focus. The first worker always opens a visible split.
   cmux_out=$(fm_terminal_cmux_place_worker "$caller_ws" "$caller_surface" "$layout" "$ID") || {
-    echo "error: cmux worker placement failed after leasing worktree $WT: $cmux_out" >&2
-    ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
+    echo "error: cmux worker placement failed for $WT: $cmux_out" >&2
+    [ "$KIND" = secondmate ] || ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
     exit 1
   }
   surface=$(printf '%s\n' "$cmux_out" | grep -o 'surface:[0-9][0-9]*' | tail -1 || true)
   if [ -z "$surface" ]; then
-    echo "error: cmux did not report a surface after leasing worktree $WT: $cmux_out" >&2
-    ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
+    echo "error: cmux did not report a surface for $WT: $cmux_out" >&2
+    [ "$KIND" = secondmate ] || ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
     exit 1
   fi
   pane=$(for p in $(cmux list-panes --workspace "$caller_ws" 2>/dev/null | grep -o 'pane:[0-9][0-9]*'); do cmux list-pane-surfaces --workspace "$caller_ws" --pane "$p" 2>/dev/null | grep -q "${surface}" && { echo "$p"; break; }; done)
@@ -546,18 +556,32 @@ spawn_cmux_and_exit() {
   mkdir -p "$TASK_TMP/gotmp" "$STATE"
   STATE_REAL=$(cd "$STATE" && pwd -P)
   TURNEND="$STATE_REAL/$ID.turn-ended"
-  cat > "$STATE/$ID.pi-ext.ts" <<EOF
+  # Per-worktree turn-end hook: secondmates skip it (mirror the tmux path). A
+  # secondmate is supervised by status writes + heartbeats, not a turn-end signal,
+  # and its secondmate launch template carries no __PIEXT__ placeholder anyway.
+  if [ "$KIND" != secondmate ]; then
+    cat > "$STATE/$ID.pi-ext.ts" <<EOF
 // Firstmate turn-end signal; written by fm-spawn.
 import { execFile } from "node:child_process";
 export default function (pi: any) {
   pi.on("turn_end", () => execFile("touch", ["$TURNEND"]));
 }
 EOF
+  fi
 
-  PROJ_NAME=$(basename "$PROJ_ABS")
-  read -r MODE YOLO <<EOF
+  # MODE/YOLO: a secondmate is always mode=secondmate/yolo=off (the tmux path sets
+  # the same); a ship/scout crewmate resolves the project's delivery mode.
+  SECONDMATE_PROJECTS=
+  if [ "$KIND" = secondmate ]; then
+    MODE=secondmate
+    YOLO=off
+    SECONDMATE_PROJECTS=$(secondmate_registry_value "$ID" projects || true)
+  else
+    PROJ_NAME=$(basename "$PROJ_ABS")
+    read -r MODE YOLO <<EOF
 $("$FM_ROOT/bin/fm-project-mode.sh" "$PROJ_NAME")
 EOF
+  fi
 
   sq_brief=$(shell_quote "$BRIEF")
   sq_turnend=$(shell_quote "$TURNEND")
@@ -570,14 +594,18 @@ EOF
   LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
   LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
   LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
+  if [ "$KIND" = secondmate ]; then
+    # The secondmate agent runs on its OWN home: clear inherited operational
+    # overrides and point FM_HOME at the home, exactly as the tmux secondmate path.
+    sq_home=$(shell_quote "$PROJ_ABS")
+    LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $LAUNCH"
+  fi
 
   {
     echo "terminal_backend=cmux"
     echo "workspace=$caller_ws"
     [ -n "$pane" ] && echo "pane=$pane"
     echo "surface=$surface"
-    echo "worktree=$WT"
-    echo "project=$PROJ_ABS"
     echo "harness=$HARNESS"
     echo "kind=$KIND"
     echo "mode=$MODE"
@@ -585,20 +613,38 @@ EOF
     echo "tasktmp=$TASK_TMP"
     echo "model=${MODEL:-default}"
     echo "effort=${EFFORT:-default}"
+    if [ "$KIND" = secondmate ]; then
+      # A cmux secondmate runs in its persistent home, not a leased worktree, so it
+      # records home=/projects= and NO worktree=/window= (a cmux secondmate has
+      # neither). Recovery keys off kind=secondmate + home=; the watcher enumerates
+      # it as fm-<id> (no window=) and skips its stale-pane wake as a secondmate.
+      echo "home=$PROJ_ABS"
+      echo "projects=$SECONDMATE_PROJECTS"
+    else
+      echo "worktree=$WT"
+      echo "project=$PROJ_ABS"
+    fi
   } > "$STATE/$ID.meta"
 
   launch_line="cd $(shell_quote "$WT") && export GOTMPDIR=$(shell_quote "$TASK_TMP/gotmp") && $LAUNCH"
   cmux rename-tab --workspace "$caller_ws" --surface "$surface" "$task_title" >/dev/null 2>&1 || true
   cmux send --workspace "$caller_ws" --surface "$surface" "$launch_line\n" || {
-    echo "error: cmux launch send failed; workspace=$caller_ws surface=$surface worktree=$WT" >&2
+    echo "error: cmux launch send failed; workspace=$caller_ws surface=$surface path=$WT" >&2
     exit 1
   }
-  echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO terminal=cmux workspace=$caller_ws surface=$surface worktree=$WT"
+  if [ "$KIND" = secondmate ]; then
+    echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO terminal=cmux workspace=$caller_ws surface=$surface home=$PROJ_ABS"
+  else
+    echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO terminal=cmux workspace=$caller_ws surface=$surface worktree=$WT"
+  fi
   exit 0
 }
 
 TERMINAL_BACKEND=$(fm_terminal_config_backend) || exit 1
-if [ "$KIND" != secondmate ] && [ "$TERMINAL_BACKEND" = cmux ]; then
+if [ "$TERMINAL_BACKEND" = cmux ]; then
+  # Ship/scout crewmates AND secondmates all launch into a cmux surface when the
+  # backend is cmux; spawn_cmux_and_exit branches on kind=secondmate to skip the
+  # worktree lease and launch in the persistent home instead (Phase B slice 3).
   spawn_cmux_and_exit
 fi
 

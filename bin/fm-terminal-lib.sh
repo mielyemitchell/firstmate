@@ -56,7 +56,10 @@ fm_terminal_cmux_layout() {  # -> splits|tabs|hybrid|auto
 }
 
 # Count live cmux workers this home already has: state/<id>.meta with
-# terminal_backend=cmux, excluding the task being spawned and any secondmate.
+# terminal_backend=cmux, excluding only the task being spawned. Secondmates count
+# like any other cmux worker (Phase B slice 3): a cmux secondmate is a first-class
+# visible worker, so it participates in the layout count for its own placement and
+# for later workers' placement.
 fm_terminal_cmux_worker_count() {  # <exclude-id> -> N
   local exclude=$1 state=${STATE:?STATE required} meta base n=0
   for meta in "$state"/*.meta; do
@@ -64,7 +67,6 @@ fm_terminal_cmux_worker_count() {  # <exclude-id> -> N
     base=$(basename "$meta" .meta)
     [ "$base" = "$exclude" ] && continue
     [ "$(fm_terminal_meta_value "$meta" terminal_backend)" = cmux ] || continue
-    [ "$(fm_terminal_meta_value "$meta" kind)" = secondmate ] && continue
     n=$((n + 1))
   done
   printf '%s\n' "$n"
@@ -86,7 +88,9 @@ fm_terminal_cmux_layout_action() {  # <layout> <N> -> split|tab
 
 # The pane a tab-overflow worker should stack into: the pane of the most recently
 # spawned cmux worker, so overflow lands in an existing worker pane. Empty (rc 1)
-# when no such pane is recorded, letting the caller fall back to a split.
+# when no such pane is recorded, letting the caller fall back to a split. A cmux
+# secondmate counts like any other cmux worker (Phase B slice 3), so its pane is a
+# valid overflow target too.
 fm_terminal_cmux_overflow_pane() {  # <exclude-id> -> pane:N
   local exclude=$1 state=${STATE:?STATE required} meta base pane newest='' newest_pane=''
   for meta in "$state"/*.meta; do
@@ -94,7 +98,6 @@ fm_terminal_cmux_overflow_pane() {  # <exclude-id> -> pane:N
     base=$(basename "$meta" .meta)
     [ "$base" = "$exclude" ] && continue
     [ "$(fm_terminal_meta_value "$meta" terminal_backend)" = cmux ] || continue
-    [ "$(fm_terminal_meta_value "$meta" kind)" = secondmate ] && continue
     pane=$(fm_terminal_meta_value "$meta" pane)
     [ -n "$pane" ] || continue
     if [ -z "$newest" ] || [ "$meta" -nt "$newest" ]; then

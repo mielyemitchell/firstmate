@@ -227,6 +227,7 @@ Cheapest proof for first slice:
    - teardown safely.
 4. Verify branch/commit preservation from the primary sandbox repo after cleanup.
 5. Layout policy (slice 2): under `auto`, spawn workers in sequence and confirm the 1st–3rd each open a visible split and the 4th+ overflow to a tab in an existing worker pane; confirm `config/cmux-layout=splits|tabs|hybrid` force the expected shape and none steal focus.
+6. Secondmate cmux (slice 3): with `config/terminal-backend=cmux`, route/spawn a secondmate and confirm it opens a visible cmux surface in its persistent firstmate home (no treehouse worktree lease), placed by the same layout policy without stealing focus; its meta records `terminal_backend=cmux` + `surface`/`workspace`/`pane` + `home`/`projects` and no `worktree=`/`window=`; the pre-launch home fast-forward and config inheritance still run; and the watcher leaves the idle secondmate surface alone (idle = healthy).
 
 ## Testing strategy
 
@@ -238,7 +239,7 @@ Cheapest proof for first slice:
 ## Out of scope for first slice
 
 - Replacing every watcher path in one PR.
-- Full secondmate cmux support; secondmate spawn remains tmux-only in the first slice even when `config/terminal-backend=cmux`.
+- Full secondmate cmux support; secondmate spawn remains tmux-only in the first slice even when `config/terminal-backend=cmux`. (Landed later in slice 3: secondmates launch in cmux surfaces in their persistent home — see verification step 6.)
 - X mode / public reply integration.
 - Automatic PR creation or no-mistakes changes.
 - Polished status UI, badges, or notifications beyond basic surface naming/flash.
