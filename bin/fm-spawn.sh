@@ -498,7 +498,10 @@ spawn_cmux_and_exit() {
   cmux ping >/dev/null 2>&1 || { echo "error: terminal backend is cmux but cmux is not reachable" >&2; exit 1; }
   command -v python3 >/dev/null 2>&1 || { echo "error: cmux backend needs python3 to parse cmux identify output" >&2; exit 1; }
 
-  local identify caller_ws caller_surface lease_out cmux_out surface pane task_title
+  local identify caller_ws caller_surface lease_out cmux_out surface pane task_title layout
+  # Resolve the layout policy up front so an invalid config/cmux-layout fails fast,
+  # before any treehouse lease or cmux surface is created.
+  layout=$(fm_terminal_cmux_layout) || exit 1
   identify=$(cmux identify --json 2>/dev/null) || { echo "error: cmux identify failed; run firstmate from inside cmux or set terminal-backend=tmux" >&2; exit 1; }
   caller_ws=$(printf '%s\n' "$identify" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("caller",{}).get("workspace_ref", ""))')
   caller_surface=$(printf '%s\n' "$identify" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("caller",{}).get("surface_ref", ""))')
@@ -523,19 +526,14 @@ spawn_cmux_and_exit() {
   fi
 
   task_title="fm-$ID"
-  if [ -n "$caller_surface" ]; then
-    cmux_out=$(cmux new-split right --workspace "$caller_ws" --surface "$caller_surface" --focus false 2>&1) || {
-      echo "error: cmux split failed after leasing worktree $WT: $cmux_out" >&2
-      ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
-      exit 1
-    }
-  else
-    cmux_out=$(cmux new-pane --type terminal --direction right --workspace "$caller_ws" --focus false 2>&1) || {
-      echo "error: cmux pane failed after leasing worktree $WT: $cmux_out" >&2
-      ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
-      exit 1
-    }
-  fi
+  # Place the worker per the layout policy: visible splits for 1-3 workers, tab
+  # overflow for the 4th+ under auto/hybrid; explicit splits/tabs honored. Never
+  # steals focus. The first worker always opens a visible split.
+  cmux_out=$(fm_terminal_cmux_place_worker "$caller_ws" "$caller_surface" "$layout" "$ID") || {
+    echo "error: cmux worker placement failed after leasing worktree $WT: $cmux_out" >&2
+    ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
+    exit 1
+  }
   surface=$(printf '%s\n' "$cmux_out" | grep -o 'surface:[0-9][0-9]*' | tail -1 || true)
   if [ -z "$surface" ]; then
     echo "error: cmux did not report a surface after leasing worktree $WT: $cmux_out" >&2

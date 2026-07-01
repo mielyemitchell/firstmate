@@ -30,6 +30,102 @@ fm_terminal_config_backend() {  # -> tmux|cmux
   esac
 }
 
+# --- cmux multi-worker layout policy ---------------------------------------
+#
+# Placement policy for a NEW cmux worker, given how many cmux workers this home
+# already has. Mielye default (auto): the 1st..3rd workers each get their own
+# visible split so they are watchable at once; the 4th and later workers overflow
+# to a tab (extra surface) in an existing worker pane instead of an unbounded pile
+# of splits. Explicit config/cmux-layout values force one shape.
+#
+# FM_CMUX_SPLIT_THRESHOLD is the max number of EXISTING workers that still get a
+# split under auto/hybrid: a new worker splits while count < threshold and
+# overflows to a tab once count >= threshold (so with 3, workers 1-3 split and
+# worker 4+ tabs). Named so it is obvious and tunable.
+FM_CMUX_SPLIT_THRESHOLD=${FM_CMUX_SPLIT_THRESHOLD:-3}
+
+fm_terminal_cmux_layout() {  # -> splits|tabs|hybrid|auto
+  local config_dir=${FM_CONFIG_OVERRIDE:-${CONFIG:-${FM_HOME:-}/config}} raw
+  raw=auto
+  [ -n "$config_dir" ] && [ -f "$config_dir/cmux-layout" ] && raw=$(tr -d '[:space:]' < "$config_dir/cmux-layout")
+  [ -n "$raw" ] || raw=auto
+  case "$raw" in
+    splits|tabs|hybrid|auto) printf '%s\n' "$raw" ;;
+    *) echo "error: invalid cmux layout '$raw' in $config_dir/cmux-layout (expected splits, tabs, hybrid, or auto)" >&2; return 2 ;;
+  esac
+}
+
+# Count live cmux workers this home already has: state/<id>.meta with
+# terminal_backend=cmux, excluding the task being spawned and any secondmate.
+fm_terminal_cmux_worker_count() {  # <exclude-id> -> N
+  local exclude=$1 state=${STATE:?STATE required} meta base n=0
+  for meta in "$state"/*.meta; do
+    [ -f "$meta" ] || continue
+    base=$(basename "$meta" .meta)
+    [ "$base" = "$exclude" ] && continue
+    [ "$(fm_terminal_meta_value "$meta" terminal_backend)" = cmux ] || continue
+    [ "$(fm_terminal_meta_value "$meta" kind)" = secondmate ] && continue
+    n=$((n + 1))
+  done
+  printf '%s\n' "$n"
+}
+
+# Decide placement for a new worker: split (own visible pane) or tab (overflow
+# surface). N is the existing cmux worker count.
+fm_terminal_cmux_layout_action() {  # <layout> <N> -> split|tab
+  local layout=$1 n=$2
+  case "$layout" in
+    splits) printf 'split\n' ;;
+    # tabs: the first worker still opens a visible split to create the crew pane;
+    # every later worker becomes a tab in it.
+    tabs) [ "$n" -eq 0 ] && printf 'split\n' || printf 'tab\n' ;;
+    # hybrid and auto share the Mielye default: split up to the threshold, then tab.
+    *) [ "$n" -lt "$FM_CMUX_SPLIT_THRESHOLD" ] && printf 'split\n' || printf 'tab\n' ;;
+  esac
+}
+
+# The pane a tab-overflow worker should stack into: the pane of the most recently
+# spawned cmux worker, so overflow lands in an existing worker pane. Empty (rc 1)
+# when no such pane is recorded, letting the caller fall back to a split.
+fm_terminal_cmux_overflow_pane() {  # <exclude-id> -> pane:N
+  local exclude=$1 state=${STATE:?STATE required} meta base pane newest='' newest_pane=''
+  for meta in "$state"/*.meta; do
+    [ -f "$meta" ] || continue
+    base=$(basename "$meta" .meta)
+    [ "$base" = "$exclude" ] && continue
+    [ "$(fm_terminal_meta_value "$meta" terminal_backend)" = cmux ] || continue
+    [ "$(fm_terminal_meta_value "$meta" kind)" = secondmate ] && continue
+    pane=$(fm_terminal_meta_value "$meta" pane)
+    [ -n "$pane" ] || continue
+    if [ -z "$newest" ] || [ "$meta" -nt "$newest" ]; then
+      newest=$meta; newest_pane=$pane
+    fi
+  done
+  [ -n "$newest_pane" ] || return 1
+  printf '%s\n' "$newest_pane"
+}
+
+# Create the worker surface per the resolved layout and echo cmux's output so the
+# caller can grep out surface:N. Runs exactly one cmux command (never steals focus)
+# and returns its exit status. Split uses new-split off the caller surface (or a
+# new-pane when there is no caller surface); tab overflow uses new-surface in an
+# existing worker pane, falling back to a split when no such pane exists yet.
+fm_terminal_cmux_place_worker() {  # <workspace> <caller_surface> <layout> <exclude-id>
+  local ws=$1 caller_surface=$2 layout=$3 exclude=$4 n action pane
+  n=$(fm_terminal_cmux_worker_count "$exclude") || return 1
+  action=$(fm_terminal_cmux_layout_action "$layout" "$n")
+  if [ "$action" = tab ]; then
+    pane=$(fm_terminal_cmux_overflow_pane "$exclude") || action='split'
+  fi
+  if [ "$action" = tab ]; then
+    cmux new-surface --type terminal --pane "$pane" --workspace "$ws" --focus false 2>&1
+  elif [ -n "$caller_surface" ]; then
+    cmux new-split right --workspace "$ws" --surface "$caller_surface" --focus false 2>&1
+  else
+    cmux new-pane --type terminal --direction right --workspace "$ws" --focus false 2>&1
+  fi
+}
+
 fm_terminal_target_meta() {  # <target> -> meta path or empty
   case "$1" in
     fm-*) printf '%s/%s.meta\n' "${STATE:?STATE required}" "${1#fm-}" ;;

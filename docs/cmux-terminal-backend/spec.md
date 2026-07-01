@@ -226,6 +226,7 @@ Cheapest proof for first slice:
    - interrupt long command;
    - teardown safely.
 4. Verify branch/commit preservation from the primary sandbox repo after cleanup.
+5. Layout policy (slice 2): under `auto`, spawn workers in sequence and confirm the 1st–3rd each open a visible split and the 4th+ overflow to a tab in an existing worker pane; confirm `config/cmux-layout=splits|tabs|hybrid` force the expected shape and none steal focus.
 
 ## Testing strategy
 
