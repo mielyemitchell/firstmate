@@ -504,7 +504,7 @@ spawn_cmux_and_exit() {
   cmux ping >/dev/null 2>&1 || { echo "error: terminal backend is cmux but cmux is not reachable" >&2; exit 1; }
   command -v python3 >/dev/null 2>&1 || { echo "error: cmux backend needs python3 to parse cmux identify output" >&2; exit 1; }
 
-  local identify caller_ws caller_surface lease_out cmux_out surface pane task_title layout
+  local identify caller_ws caller_surface lease_out cmux_out surface worker_ws pane task_title layout
   # Resolve the layout policy up front so an invalid config/cmux-layout fails fast,
   # before any treehouse lease or cmux surface is created.
   layout=$(fm_terminal_cmux_layout) || exit 1
@@ -536,9 +536,10 @@ spawn_cmux_and_exit() {
   fi
 
   task_title="fm-$ID"
-  # Place the worker per the layout policy: visible splits for 1-3 workers, tab
-  # overflow for the 4th+ under auto/hybrid; explicit splits/tabs honored. Never
-  # steals focus. The first worker always opens a visible split.
+  # Place the worker per the layout policy: under auto, tile a 2-row grid to the
+  # right of firstmate (2x2 for the default capacity) and overflow to a NEW cmux
+  # window once the grid is full; explicit splits/tabs/hybrid honored. Never steals
+  # focus. The first worker always opens a visible split off firstmate.
   cmux_out=$(fm_terminal_cmux_place_worker "$caller_ws" "$caller_surface" "$layout" "$ID") || {
     echo "error: cmux worker placement failed for $WT: $cmux_out" >&2
     [ "$KIND" = secondmate ] || ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
@@ -550,7 +551,14 @@ spawn_cmux_and_exit() {
     [ "$KIND" = secondmate ] || ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
     exit 1
   fi
-  pane=$(for p in $(cmux list-panes --workspace "$caller_ws" 2>/dev/null | grep -o 'pane:[0-9][0-9]*'); do cmux list-pane-surfaces --workspace "$caller_ws" --pane "$p" 2>/dev/null | grep -q "${surface}" && { echo "$p"; break; }; done)
+  # The worker's workspace is firstmate's own for a grid/split/tab placement, but a
+  # NEW workspace when auto overflowed to a new window - the placement echoes it in
+  # that case. Capture it (falling back to the caller workspace) and use it for the
+  # pane lookup, meta, rename, and launch send so a new-window worker is addressed
+  # in its own window rather than firstmate's.
+  worker_ws=$(printf '%s\n' "$cmux_out" | grep -o 'workspace:[0-9][0-9]*' | tail -1 || true)
+  [ -n "$worker_ws" ] || worker_ws=$caller_ws
+  pane=$(for p in $(cmux list-panes --workspace "$worker_ws" 2>/dev/null | grep -o 'pane:[0-9][0-9]*'); do cmux list-pane-surfaces --workspace "$worker_ws" --pane "$p" 2>/dev/null | grep -q "${surface}" && { echo "$p"; break; }; done)
 
   TASK_TMP="/tmp/fm-$ID"
   mkdir -p "$TASK_TMP/gotmp" "$STATE"
@@ -603,7 +611,7 @@ EOF
 
   {
     echo "terminal_backend=cmux"
-    echo "workspace=$caller_ws"
+    echo "workspace=$worker_ws"
     [ -n "$pane" ] && echo "pane=$pane"
     echo "surface=$surface"
     echo "harness=$HARNESS"
@@ -627,15 +635,15 @@ EOF
   } > "$STATE/$ID.meta"
 
   launch_line="cd $(shell_quote "$WT") && export GOTMPDIR=$(shell_quote "$TASK_TMP/gotmp") && $LAUNCH"
-  cmux rename-tab --workspace "$caller_ws" --surface "$surface" "$task_title" >/dev/null 2>&1 || true
-  cmux send --workspace "$caller_ws" --surface "$surface" "$launch_line\n" || {
-    echo "error: cmux launch send failed; workspace=$caller_ws surface=$surface path=$WT" >&2
+  cmux rename-tab --workspace "$worker_ws" --surface "$surface" "$task_title" >/dev/null 2>&1 || true
+  cmux send --workspace "$worker_ws" --surface "$surface" "$launch_line\n" || {
+    echo "error: cmux launch send failed; workspace=$worker_ws surface=$surface path=$WT" >&2
     exit 1
   }
   if [ "$KIND" = secondmate ]; then
-    echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO terminal=cmux workspace=$caller_ws surface=$surface home=$PROJ_ABS"
+    echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO terminal=cmux workspace=$worker_ws surface=$surface home=$PROJ_ABS"
   else
-    echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO terminal=cmux workspace=$caller_ws surface=$surface worktree=$WT"
+    echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO terminal=cmux workspace=$worker_ws surface=$surface worktree=$WT"
   fi
   exit 0
 }

@@ -68,10 +68,10 @@ config/cmux-layout
 
 Allowed values:
 
-- `splits` — visible split per worker.
-- `tabs` — one crew pane with worker tabs.
-- `hybrid` — split layout up to threshold, then tab overflow.
-- absent / `auto` — Mielye default: visible splits for 1–3 workers, hybrid for 4+.
+- `splits` — a visible right-split off firstmate per worker (vertical strips).
+- `tabs` — one crew pane (first worker splits) with worker tabs.
+- `hybrid` — split up to `FM_CMUX_SPLIT_THRESHOLD`, then tab overflow (the pre-grid `auto` behaviour, kept under its own name).
+- absent / `auto` — Mielye default: firstmate pinned left, workers tile a grid to its right, overflowing to a new window when the grid is full (see Layout policy).
 
 ### Backend library
 
@@ -133,16 +133,39 @@ For cmux worker spawn:
 
 ### Layout policy
 
-Mielye default:
+Mielye default (`auto`): firstmate's own pane stays pinned on the **left** and is
+never sliced into a strip. Workers tile into a **grid** to its right — a 2-row
+grid filled column-major (a 2×2 for the default capacity of 4). When the grid is
+full the next worker opens a **new cmux window** and the grid fills again there.
 
-- 1–3 active workers: create visible splits, so workers are watchable at once.
-- 4+ active workers: use hybrid overflow, preserving firstmate visibility and avoiding pane chaos.
+Concrete tiling for `auto` (capacity `FM_CMUX_GRID_CAPACITY`, default 4; rows
+`FM_CMUX_GRID_ROWS`, default 2):
 
-Implementation can start simpler:
+- Worker 1: `cmux new-split right` off firstmate's caller surface → top-right cell.
+- Worker 2: `cmux new-split down` off worker 1's surface → bottom of column 1.
+- Worker 3: `cmux new-split right` off worker 1's surface → top of column 2.
+- Worker 4: `cmux new-split down` off worker 3's surface → bottom of column 2.
+- Worker 5 (grid full): `cmux new-window`, a `cmux new-workspace` in it, and a
+  `cmux new-pane` terminal surface — then the grid fills again in that window.
 
-- first cmux slice may create one right-side worker pane only;
-- first slice should explicitly mark layout threshold support as not implemented yet;
-- second slice adds split counting + hybrid overflow.
+Later workers anchor (split) off a **prior worker's** surface with an alternating
+direction, so firstmate is only ever the anchor for worker 1. Anchors are
+resolved from the recorded worker `surface`/`workspace` values in `state/*.meta`,
+ordered by cmux's monotonically-increasing surface ref (a later worker gets a
+higher number), so ordering is stable across meta appends and across windows.
+Every command that accepts `--focus` passes `--focus false`; `cmux new-window` is
+bare (no `--focus` flag) and is the one command that can take focus.
+
+Tunables (local, env): `FM_CMUX_GRID_CAPACITY` sets how many workers fill one grid
+(one window) before overflow; `FM_CMUX_GRID_ROWS` sets the grid height;
+`FM_CMUX_SPLIT_THRESHOLD` still governs `hybrid`.
+
+Implementation history:
+
+- first cmux slice created one right-side worker pane only;
+- second slice added split counting + hybrid tab overflow;
+- this slice replaced the `auto` default with the grid + new-window policy above
+  (`hybrid` keeps the old split-then-tab behaviour under its own name).
 
 ### Outcome detection
 
@@ -175,7 +198,7 @@ cmux teardown must preserve the current safety invariant:
 - Use backend abstraction, not a one-off cmux fork.
 - Keep tmux fallback.
 - Use `treehouse get --lease` for cmux instead of interactive `treehouse get`.
-- Default UX is visible splits for up to 3 workers, hybrid for 4+.
+- Default UX (`auto`) is firstmate pinned left with workers in a grid to its right, overflowing to a new window when the grid is full; `hybrid` retains the earlier split-to-threshold-then-tab behaviour.
 - First implementation slice should not attempt every firstmate feature at once.
 - X mode is additive over the terminal backend, not a per-backend fork (slice 4). The X-path scripts (`bin/fm-x-*.sh`) and the `fmx-respond` skill are terminal-independent: they only read/write `state/<id>.meta` by line and talk to the relay, never reading `window=` or calling tmux. An X mention that spawns real work rides the same cmux-aware lifecycle as any task — `fm-spawn.sh` (slices 1–2), `fm-watch.sh` (slice 1), and `fm-crew-state.sh` (slice 1) — so the audit found no residual tmux/`window=` assumption to fix.
 
@@ -210,8 +233,9 @@ cmux teardown must preserve the current safety invariant:
 
 Later-slice layout acceptance:
 
-- Given 1–3 live cmux workers, when new workers spawn, then they appear as visible splits.
-- Given 4+ live cmux workers, when another worker spawns, then overflow uses hybrid/tab behavior instead of unlimited random splits.
+- Given `auto` and an empty-to-full grid, when workers 1–4 spawn, then they tile a 2×2 grid to firstmate's right (right/down/right/down, anchored off firstmate then prior workers), with firstmate never sliced into a strip.
+- Given `auto` and a full grid (`FM_CMUX_GRID_CAPACITY` workers), when another worker spawns, then it opens a new cmux window and is placed there instead of piling more splits/tabs into the existing window.
+- Given `config/cmux-layout=splits|tabs|hybrid`, when workers spawn, then each forces its named shape and none steal focus.
 
 Slice 4 X-mode-under-cmux acceptance:
 
@@ -233,7 +257,7 @@ Cheapest proof for first slice:
    - interrupt long command;
    - teardown safely.
 4. Verify branch/commit preservation from the primary sandbox repo after cleanup.
-5. Layout policy (slice 2): under `auto`, spawn workers in sequence and confirm the 1st–3rd each open a visible split and the 4th+ overflow to a tab in an existing worker pane; confirm `config/cmux-layout=splits|tabs|hybrid` force the expected shape and none steal focus.
+5. Layout policy: under `auto`, spawn workers in sequence and confirm workers 1–4 tile a 2×2 grid to firstmate's right (right/down/right/down, anchored off firstmate then prior workers) and worker 5 opens a new cmux window; confirm `config/cmux-layout=splits|tabs|hybrid` force the expected shape and none steal focus. Automated coverage lives in `tests/fm-terminal-cmux.test.sh` (grid arithmetic, grid command shapes, new-window overflow, cross-window anchoring, focus).
 6. Secondmate cmux (slice 3): with `config/terminal-backend=cmux`, route/spawn a secondmate and confirm it opens a visible cmux surface in its persistent firstmate home (no treehouse worktree lease), placed by the same layout policy without stealing focus; its meta records `terminal_backend=cmux` + `surface`/`workspace`/`pane` + `home`/`projects` and no `worktree=`/`window=`; the pre-launch home fast-forward and config inheritance still run; and the watcher leaves the idle secondmate surface alone (idle = healthy).
 7. X mode under cmux (slice 4): automated coverage lives in `tests/fm-x-cmux.test.sh` — the link records into a cmux meta (no `window=`), `fm-x-followup.sh --check` reports/prunes the due `request_id` for a cmux-linked task, the dry-run follow-up loop clears the link, and the X path never shells out to tmux for a cmux task (tmux tripwire). Manual live-cmux checklist (needs a live relay + cmux app): with `FMX_PAIRING_TOKEN` in `.env` and `config/terminal-backend=cmux`, post an actionable mention to `@myfirstmate`, then confirm the poll wakes firstmate, `fmx-respond` spawns a **visible cmux worker** for the work, `bin/fm-x-link.sh` links it, and when that cmux worker finishes the single completion follow-up posts back to the mention (verify via `state/x-outbox/` under `FMX_DRY_RUN` first, then live).
 
