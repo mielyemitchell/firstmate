@@ -177,6 +177,7 @@ cmux teardown must preserve the current safety invariant:
 - Use `treehouse get --lease` for cmux instead of interactive `treehouse get`.
 - Default UX is visible splits for up to 3 workers, hybrid for 4+.
 - First implementation slice should not attempt every firstmate feature at once.
+- X mode is additive over the terminal backend, not a per-backend fork (slice 4). The X-path scripts (`bin/fm-x-*.sh`) and the `fmx-respond` skill are terminal-independent: they only read/write `state/<id>.meta` by line and talk to the relay, never reading `window=` or calling tmux. An X mention that spawns real work rides the same cmux-aware lifecycle as any task — `fm-spawn.sh` (slices 1–2), `fm-watch.sh` (slice 1), and `fm-crew-state.sh` (slice 1) — so the audit found no residual tmux/`window=` assumption to fix.
 
 ## Invariants
 
@@ -212,6 +213,12 @@ Later-slice layout acceptance:
 - Given 1–3 live cmux workers, when new workers spawn, then they appear as visible splits.
 - Given 4+ live cmux workers, when another worker spawns, then overflow uses hybrid/tab behavior instead of unlimited random splits.
 
+Slice 4 X-mode-under-cmux acceptance:
+
+- Given `config/terminal-backend=cmux`, when an actionable X mention spawns a task, then it spawns a cmux worker (no `window=`; `terminal_backend=cmux` + `surface`) through the normal lifecycle, with no X-specific spawn path.
+- Given a cmux task, when `bin/fm-x-link.sh` links it to its originating mention, then `x_request=`/`x_request_ts=` are recorded and every cmux meta field is preserved, and no `window=` line is introduced.
+- Given a cmux X-linked task reaches a terminal state, when the completion wake fires (via `fm-crew-state.sh`, slice 1), then `bin/fm-x-followup.sh --check` reports the due `request_id` and the single follow-up posts through `bin/fm-x-reply.sh --followup`; a link past the 24h window is pruned silently.
+
 ## Verification loop
 
 Cheapest proof for first slice:
@@ -228,6 +235,7 @@ Cheapest proof for first slice:
 4. Verify branch/commit preservation from the primary sandbox repo after cleanup.
 5. Layout policy (slice 2): under `auto`, spawn workers in sequence and confirm the 1st–3rd each open a visible split and the 4th+ overflow to a tab in an existing worker pane; confirm `config/cmux-layout=splits|tabs|hybrid` force the expected shape and none steal focus.
 6. Secondmate cmux (slice 3): with `config/terminal-backend=cmux`, route/spawn a secondmate and confirm it opens a visible cmux surface in its persistent firstmate home (no treehouse worktree lease), placed by the same layout policy without stealing focus; its meta records `terminal_backend=cmux` + `surface`/`workspace`/`pane` + `home`/`projects` and no `worktree=`/`window=`; the pre-launch home fast-forward and config inheritance still run; and the watcher leaves the idle secondmate surface alone (idle = healthy).
+7. X mode under cmux (slice 4): automated coverage lives in `tests/fm-x-cmux.test.sh` — the link records into a cmux meta (no `window=`), `fm-x-followup.sh --check` reports/prunes the due `request_id` for a cmux-linked task, the dry-run follow-up loop clears the link, and the X path never shells out to tmux for a cmux task (tmux tripwire). Manual live-cmux checklist (needs a live relay + cmux app): with `FMX_PAIRING_TOKEN` in `.env` and `config/terminal-backend=cmux`, post an actionable mention to `@myfirstmate`, then confirm the poll wakes firstmate, `fmx-respond` spawns a **visible cmux worker** for the work, `bin/fm-x-link.sh` links it, and when that cmux worker finishes the single completion follow-up posts back to the mention (verify via `state/x-outbox/` under `FMX_DRY_RUN` first, then live).
 
 ## Testing strategy
 
@@ -240,7 +248,7 @@ Cheapest proof for first slice:
 
 - Replacing every watcher path in one PR.
 - Full secondmate cmux support; secondmate spawn remains tmux-only in the first slice even when `config/terminal-backend=cmux`. (Landed later in slice 3: secondmates launch in cmux surfaces in their persistent home — see verification step 6.)
-- X mode / public reply integration.
+- X mode / public reply integration. (Audited in slice 4: X mode is additive and already works under cmux via the slices-1–3 cmux-aware lifecycle — no core change needed; see verification step 7 and `tests/fm-x-cmux.test.sh`.)
 - Automatic PR creation or no-mistakes changes.
 - Polished status UI, badges, or notifications beyond basic surface naming/flash.
 - Removing tmux.
