@@ -11,9 +11,11 @@
 #   signal: <file>...      status/turn-end signals, surfaced when a listed status
 #                          has a captain-relevant verb OR a no-verb signal's crew
 #                          is not provably working, unless afk is active
-#   stale: <window>        terminal stale pane, a non-terminal stale whose crew is
+#   stale: <worker>        terminal stale pane, a non-terminal stale whose crew is
 #                          not provably working (surfaced at once), or a provably-
-#                          working stale past the wedge threshold, unless afk active
+#                          working stale past the wedge threshold, unless afk active.
+#                          <worker> is a tmux window (session:window) or, for a cmux
+#                          worker, its fm-<id> terminal target
 #   check: <script>: <out> per-task check output, always actionable
 #   heartbeat              fleet-scan backstop found an unsurfaced captain-relevant
 #                          status, unless afk is active
@@ -36,6 +38,13 @@ mkdir -p "$STATE"
 # has one definition.
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
+# Backend-neutral terminal boundary (tmux today, cmux workers too). The stale-pane
+# read below goes through fm_terminal_read so a cmux worker (which records no
+# window=, only workspace/surface) is supervised the same way a tmux window is.
+# For a tmux window target the lib runs the identical `tmux capture-pane` it did
+# before, so tmux behavior is unchanged.
+# shellcheck source=bin/fm-terminal-lib.sh
+. "$SCRIPT_DIR/fm-terminal-lib.sh"
 
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
@@ -143,12 +152,28 @@ hash_pane() {
   if command -v md5 >/dev/null 2>&1; then md5 -q; else md5sum | cut -d' ' -f1; fi
 }
 
-window_kind() {
-  local w=$1 meta mw kind
+# Kind of the worker a stale-loop token refers to. The token is either a tmux
+# window (session:window, contains a colon) or a cmux terminal target (fm-<id>,
+# no colon). A tmux token is resolved by matching window= across metas, exactly
+# as before; a cmux token resolves its meta directly by task id.
+worker_kind() {
+  local tok=$1 meta mw kind id
+  case "$tok" in
+    *:*) : ;;   # tmux window token: match by window= below (unchanged behavior)
+    *)
+      id=$(window_to_task "$tok")
+      meta="$STATE/$id.meta"
+      [ -e "$meta" ] || { echo unknown; return 0; }
+      kind=$(grep '^kind=' "$meta" | cut -d= -f2- || true)
+      [ -n "$kind" ] || kind=ship
+      echo "$kind"
+      return 0
+      ;;
+  esac
   for meta in "$STATE"/*.meta; do
     [ -e "$meta" ] || continue
     mw=$(grep '^window=' "$meta" | cut -d= -f2- || true)
-    [ "$mw" = "$w" ] || continue
+    [ "$mw" = "$tok" ] || continue
     kind=$(grep '^kind=' "$meta" | cut -d= -f2- || true)
     [ -n "$kind" ] || kind=ship
     echo "$kind"
@@ -157,12 +182,23 @@ window_kind() {
   echo unknown
 }
 
-recorded_windows() {
-  local meta w seen=
+# Enumerate the workers the stale loop should read, one token per line. A tmux
+# task records window=<session:window> and is emitted as that window (unchanged).
+# A cmux task records no window=, only terminal_backend=cmux + workspace/surface,
+# so it is emitted as its fm-<id> terminal target; the stale loop then reads its
+# screen through fm_terminal_read like any other worker. Metas with neither are
+# skipped (nothing pane-based to supervise).
+recorded_workers() {
+  local meta w backend id seen=
   for meta in "$STATE"/*.meta; do
     [ -e "$meta" ] || continue
     w=$(grep '^window=' "$meta" | cut -d= -f2- || true)
-    [ -n "$w" ] || continue
+    if [ -z "$w" ]; then
+      backend=$(grep '^terminal_backend=' "$meta" | cut -d= -f2- || true)
+      [ "$backend" = cmux ] || continue
+      id=$(basename "$meta" .meta)
+      w="fm-$id"
+    fi
     case "$seen" in
       *"|$w|"*) continue ;;
     esac
@@ -378,8 +414,12 @@ EOF
   while IFS= read -r w; do
     # A secondmate idling on its own watcher is healthy. Its parent supervises
     # it through status writes and heartbeats, not pane-idle staleness.
-    [ "$(window_kind "$w")" = secondmate ] && continue
-    tail40=$(tmux capture-pane -p -t "$w" -S -40 2>/dev/null) || continue
+    [ "$(worker_kind "$w")" = secondmate ] && continue
+    # Read the worker's screen through the terminal boundary: a tmux window runs
+    # the identical `tmux capture-pane -p -t <w> -S -40`, a cmux worker runs
+    # `cmux read-screen`. A read failure (torn-down/unreadable) is skipped, so a
+    # missing screen reports nothing rather than a guessed state.
+    tail40=$(fm_terminal_read "$w" 40 2>/dev/null) || continue
     h=$(printf '%s' "$tail40" | hash_pane)
     key=$(printf '%s' "$w" | tr ':/.' '___')
     hf="$STATE/.hash-$key"
@@ -464,7 +504,7 @@ EOF
       # Pane content changed: the crew is active again, so reset the escalation timer.
       rm -f "$ssf"
     fi
-  done < <(recorded_windows)
+  done < <(recorded_workers)
 
   # Heartbeat: the watcher runs a cheap fleet-scan at a regular cadence no matter
   # what. Time-based via .last-heartbeat mtime; interval doubles per consecutive
