@@ -143,32 +143,37 @@ For cmux worker spawn:
 
 ### Layout policy
 
-Mielye default (`auto`): firstmate's own pane stays pinned on the **left** and is
-never sliced into a strip. Workers tile into a **grid** to its right — a 2-row
-grid filled column-major (a 2×2 for the default capacity of 4). When the grid is
-full the next worker opens a **new named workspace in firstmate's current cmux
-window** and the grid fills again there. Overflow never opens a new OS window.
+Mielye default (`auto`): workers never share firstmate's caller workspace. Each
+grid lives in an owned **new named workspace in firstmate's current cmux window**,
+starting with worker 1 in `fm crew 1`; the grid fills column-major (a 2×2 for the
+default capacity of 4), and when it is full the next worker opens `fm crew 2`,
+then `fm crew 3`, and so on. Overflow never opens a new OS window. Rationale:
+on 2026-07-02, closing a worker surface in the caller workspace killed the live
+firstmate chat, so `auto` must isolate workers from the caller workspace.
 
 Concrete tiling for `auto` (capacity `FM_CMUX_GRID_CAPACITY`, default 4; rows
 `FM_CMUX_GRID_ROWS`, default 2):
 
-- Worker 1: `cmux new-split right` off firstmate's caller surface → top-right cell.
+- Worker 1: resolve firstmate's current window explicitly with
+  `cmux current-window`, then `cmux new-workspace --name "fm crew 1" --window <id>
+  --focus false`. The new workspace's first terminal surface becomes worker 1.
 - Worker 2: `cmux new-split down` off worker 1's surface → bottom of column 1.
 - Worker 3: `cmux new-split right` off worker 1's surface → top of column 2.
 - Worker 4: `cmux new-split down` off worker 3's surface → bottom of column 2.
-- Worker 5 (grid full): resolve firstmate's current window explicitly with
-  `cmux current-window`, then `cmux new-workspace --name "fm crew 2" --window <id>
-  --focus false`. The new workspace's first terminal surface becomes worker 5.
+- Worker 5 (grid full): create `fm crew 2`. The new workspace's first terminal
+  surface becomes worker 5.
 - Worker 6+: split within that overflow workspace using the recorded
   `workspace=`/`surface=` anchors from prior workers. The next overflow workspace
   is named `fm crew 3`, and so on.
 
 Later workers anchor (split) off a **prior worker's** surface with an alternating
-direction, so firstmate is only ever the anchor for worker 1. Anchors are
-resolved from the recorded worker `surface`/`workspace` values in `state/*.meta`,
-ordered by cmux's monotonically-increasing surface ref (a later worker gets a
-higher number), so ordering is stable across meta appends and across workspaces.
-Every command that accepts `--focus` passes `--focus false`.
+direction. Firstmate's caller workspace is never a placement target under
+`auto`; if a grid anchor is missing, placement starts a fresh owned crew
+workspace instead of splitting off the caller. Anchors are resolved from the
+recorded worker `surface`/`workspace` values in `state/*.meta`, ordered by cmux's
+monotonically-increasing surface ref (a later worker gets a higher number), so
+ordering is stable across meta appends and across workspaces. Every command that
+accepts `--focus` passes `--focus false`.
 
 Tunables: `FM_CMUX_GRID_CAPACITY` or `config/cmux-grid-capacity` sets how many
 workers fill one grid before workspace overflow; `FM_CMUX_GRID_ROWS` sets the
@@ -178,9 +183,8 @@ Implementation history:
 
 - first cmux slice created one right-side worker pane only;
 - second slice added split counting + hybrid tab overflow;
-- this slice replaced the `auto` default with the grid + same-window workspace
-  overflow policy above (`hybrid` keeps the old split-then-tab behaviour under
-  its own name).
+- this slice replaced the `auto` default with owned crew workspaces from worker
+  1 (`hybrid` keeps the old split-then-tab behaviour under its own name).
 
 ### Outcome detection
 
@@ -253,8 +257,8 @@ cmux teardown must preserve the current safety invariant:
 
 Later-slice layout acceptance:
 
-- Given `auto` and an empty-to-full grid, when workers 1–4 spawn, then they tile a 2×2 grid to firstmate's right (right/down/right/down, anchored off firstmate then prior workers), with firstmate never sliced into a strip.
-- Given `auto` and a full grid (`FM_CMUX_GRID_CAPACITY` workers), when another worker spawns, then it opens a named workspace (`fm crew 2`, `fm crew 3`, ...) in firstmate's current cmux window and is placed there instead of piling more splits/tabs into the existing workspace or opening a new OS window.
+- Given `auto` and an empty-to-full grid, when workers 1–4 spawn, then worker 1 creates `fm crew 1` and workers 2–4 tile inside that owned workspace using prior-worker anchors, with firstmate's caller workspace never used as a placement target.
+- Given `auto` and a full grid (`FM_CMUX_GRID_CAPACITY` workers), when another worker spawns, then it opens the next named workspace (`fm crew 2`, `fm crew 3`, ...) in firstmate's current cmux window and is placed there instead of piling more splits/tabs into the existing workspace or opening a new OS window.
 - Given a task owns an overflow workspace (`owned_workspace=1`), when teardown closes its surface and no other live meta references that workspace, then teardown closes the workspace; without the marker, or while another live task references the workspace, teardown never closes it.
 - Given `config/cmux-layout=splits|tabs|hybrid`, when workers spawn, then each forces its named shape and none steal focus.
 
@@ -278,7 +282,7 @@ Cheapest proof for first slice:
    - interrupt long command;
    - teardown safely.
 4. Verify branch/commit preservation from the primary sandbox repo after cleanup.
-5. Layout policy: under `auto`, spawn workers in sequence and confirm workers 1–4 tile a 2×2 grid to firstmate's right (right/down/right/down, anchored off firstmate then prior workers) and worker 5 opens `fm crew 2` in the same cmux window; confirm `config/cmux-layout=splits|tabs|hybrid` force the expected shape and none steal focus. Automated coverage lives in `tests/fm-terminal-cmux.test.sh` (grid arithmetic, capacity config, grid command shapes, workspace overflow, cross-workspace anchoring, focus, and owned-workspace teardown).
+5. Layout policy: under `auto`, spawn workers in sequence and confirm worker 1 opens `fm crew 1`, workers 2–4 tile inside that workspace, worker 5 opens `fm crew 2`, and no `auto` placement targets firstmate's caller workspace; confirm `config/cmux-layout=splits|tabs|hybrid` force the expected shape and none steal focus. Automated coverage lives in `tests/fm-terminal-cmux.test.sh` (grid arithmetic, capacity config, grid command shapes, workspace overflow, cross-workspace anchoring, focus, and owned-workspace teardown).
 6. Secondmate cmux (slice 3): with `config/terminal-backend=cmux`, route/spawn a secondmate and confirm it opens a visible cmux surface in its persistent firstmate home (no treehouse worktree lease), placed by the same layout policy without stealing focus; its meta records `terminal_backend=cmux` + `surface`/`workspace`/`pane` + `home`/`projects` and no `worktree=`/`window=`; the pre-launch home fast-forward and config inheritance still run; and the watcher leaves the idle secondmate surface alone (idle = healthy).
 7. X mode under cmux (slice 4): automated coverage lives in `tests/fm-x-cmux.test.sh` — the link records into a cmux meta (no `window=`), `fm-x-followup.sh --check` reports/prunes the due `request_id` for a cmux-linked task, the dry-run follow-up loop clears the link, and the X path never shells out to tmux for a cmux task (tmux tripwire). Manual live-cmux checklist (needs a live relay + cmux app): with `FMX_PAIRING_TOKEN` in `.env` and `config/terminal-backend=cmux`, post an actionable mention to `@myfirstmate`, then confirm the poll wakes firstmate, `fmx-respond` spawns a **visible cmux worker** for the work, `bin/fm-x-link.sh` links it, and when that cmux worker finishes the single completion follow-up posts back to the mention (verify via `state/x-outbox/` under `FMX_DRY_RUN` first, then live).
 

@@ -54,6 +54,18 @@ printf '%s\n' "$*" >> "${CMUX_FAKE_LOG:-/dev/null}"
 case "${1:-}" in
   ping) exit 0 ;;
   identify) printf '{"caller":{"workspace_ref":"workspace:1","surface_ref":"surface:5"}}\n'; exit 0 ;;
+  current-window) printf 'E566A1D2-0000-0000-0000-000000000002\n'; exit 0 ;;
+  new-workspace)
+    win_seen=0; win_value=
+    prev=
+    for arg in "$@"; do
+      if [ "$prev" = "--window" ]; then win_seen=1; win_value=$arg; fi
+      prev=$arg
+    done
+    [ "$win_seen" = 1 ] && [ -n "$win_value" ] || { echo 'missing explicit --window' >&2; exit 98; }
+    printf 'created workspace:9 surface:7\n'
+    exit 0
+    ;;
   new-split|new-pane|new-surface) printf 'created surface:7 workspace:1\n'; exit 0 ;;
   list-panes) printf 'pane:3\n'; exit 0 ;;
   list-pane-surfaces) printf 'surface:7\n'; exit 0 ;;
@@ -112,10 +124,12 @@ test_cmux_secondmate_launches_in_surface() {
   assert_no_grep 'treehouse get' "$TMUX_LOG" "cmux secondmate spawn leased a treehouse worktree"
   assert_no_grep 'treehouse ' "$TMUX_LOG" "cmux secondmate spawn invoked treehouse at all"
 
-  # A cmux surface was created via the layout policy (first worker -> visible split),
+  # A cmux surface was created via the layout policy (first worker -> owned crew workspace),
   # never stealing focus.
-  assert_grep 'new-split right --workspace workspace:1 --surface surface:5 --focus false' "$CMUX_LOG" \
+  assert_grep 'new-workspace --name fm crew 1 --window E566A1D2-0000-0000-0000-000000000002 --focus false' "$CMUX_LOG" \
     "cmux secondmate did not create a surface through the layout policy"
+  assert_no_grep 'new-split right --workspace workspace:1 --surface surface:5' "$CMUX_LOG" \
+    "cmux secondmate used the caller workspace under auto layout"
 
   # The launch cd's to the HOME and runs the harness with the persistent charter and
   # cleared operational overrides pointed at the home (mirrors the tmux path).
@@ -131,7 +145,7 @@ test_cmux_secondmate_launches_in_surface() {
   assert_grep 'kind=secondmate' "$meta" "meta did not record kind=secondmate"
   assert_grep 'mode=secondmate' "$meta" "meta did not record mode=secondmate"
   assert_grep 'yolo=off' "$meta" "meta did not record yolo=off"
-  assert_grep 'workspace=workspace:1' "$meta" "meta did not record the cmux workspace"
+  assert_grep 'workspace=workspace:9' "$meta" "meta did not record the cmux workspace"
   assert_grep 'surface=surface:7' "$meta" "meta did not record the cmux surface"
   assert_grep 'pane=pane:3' "$meta" "meta did not record the cmux pane"
   assert_grep "home=$SUB_ABS" "$meta" "meta did not record the home"

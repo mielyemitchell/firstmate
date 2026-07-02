@@ -33,11 +33,9 @@ fm_terminal_config_backend() {  # -> tmux|cmux
 # --- cmux multi-worker layout policy ---------------------------------------
 #
 # Placement policy for a NEW cmux worker, given how many cmux workers this home
-# already has. Mielye default (auto): firstmate's own pane stays pinned on the
-# LEFT and is never sliced into a strip; workers tile into a 2-row grid to its
-# right (a 2x2 for the default capacity of 4). When the grid is full the next
-# worker opens a NEW cmux workspace in firstmate's current window and the grid
-# fills again there. Explicit
+# already has. Mielye default (auto): workers never share firstmate's caller
+# workspace. Each grid lives in an owned cmux workspace in firstmate's current
+# window, starting with worker 1 in "fm crew 1". Explicit
 # config/cmux-layout values force one shape:
 #   splits - a visible right-split off firstmate per worker (vertical strips).
 #   tabs   - one crew pane (first worker splits) then worker tabs.
@@ -46,11 +44,12 @@ fm_terminal_config_backend() {  # -> tmux|cmux
 #   auto   - grid + same-window workspace overflow (the default described above).
 #
 # Grid tiling detail (auto), column-major over FM_CMUX_GRID_ROWS rows:
-#   worker 1 -> new-split right off firstmate's caller surface (top-right cell)
+#   worker 1 -> new named workspace "fm crew 1"; its first surface is top-left
 #   worker 2 -> new-split down off worker 1  (bottom of column 1)
 #   worker 3 -> new-split right off worker 1 (top of column 2)
 #   worker 4 -> new-split down off worker 3  (bottom of column 2)
-#   worker 5 -> new named workspace in firstmate's current window (grid at
+#   worker 5 -> new named workspace "fm crew 2" in firstmate's current window
+#              (grid at
 #              capacity); `cmux new-workspace` creates the first terminal surface
 #              for that workspace, then the grid fills again there.
 # Anchors are resolved from the recorded worker surfaces/workspaces in
@@ -126,8 +125,8 @@ fm_terminal_cmux_layout_action() {  # <layout> <N> -> split|tab|grid|workspace
     tabs) [ "$n" -eq 0 ] && printf 'split\n' || printf 'tab\n' ;;
     # hybrid: the pre-grid default - split up to the threshold, then tab overflow.
     hybrid) [ "$n" -lt "$FM_CMUX_SPLIT_THRESHOLD" ] && printf 'split\n' || printf 'tab\n' ;;
-    # auto: grid placement, overflowing to a new workspace each time the grid fills.
-    *) if [ "$n" -gt 0 ] && [ $((n % cap)) -eq 0 ]; then printf 'workspace\n'; else printf 'grid\n'; fi ;;
+    # auto: each grid starts in an owned workspace, including the first worker.
+    *) if [ $((n % cap)) -eq 0 ]; then printf 'workspace\n'; else printf 'grid\n'; fi ;;
   esac
 }
 
@@ -135,8 +134,9 @@ fm_terminal_cmux_layout_action() {  # <layout> <N> -> split|tab|grid|workspace
 # what to anchor on. Pure arithmetic (column-major over FM_CMUX_GRID_ROWS rows,
 # FM_CMUX_GRID_CAPACITY per grid), so it is unit-testable without cmux. Prints
 # "<direction> <anchor>" where <anchor> is "caller" (split off firstmate's own
-# surface, only the very first worker) or a 0-based creation-order index into the
-# existing worker surfaces (see fm_terminal_cmux_worker_slots).
+# surface, retained as a defensive pure-arithmetic case but unreachable through
+# auto placement) or a 0-based creation-order index into the existing worker
+# surfaces (see fm_terminal_cmux_worker_slots).
 fm_terminal_cmux_grid_slot() {  # <N> -> "<left|right|up|down> <caller|index>"
   local n=$1 rows=${FM_CMUX_GRID_ROWS:-2} cap p g col row
   cap=$(fm_terminal_cmux_grid_capacity)
@@ -202,9 +202,8 @@ fm_terminal_cmux_overflow_pane() {  # <exclude-id> -> pane:N
 }
 
 # Split off firstmate's own caller surface (or a fresh right-pane when there is
-# no caller surface). Used by the splits/tabs/hybrid first-worker path and as the
-# grid's caller/fallback anchor. Echoes cmux output; --focus false never steals
-# focus.
+# no caller surface). Used by forced splits/tabs/hybrid paths only. Echoes cmux
+# output; --focus false never steals focus.
 fm_terminal_cmux_split_off_caller() {  # <workspace> <caller_surface> <direction>
   local ws=$1 caller_surface=$2 dir=${3:-right}
   if [ -n "$caller_surface" ]; then
@@ -217,23 +216,27 @@ fm_terminal_cmux_split_off_caller() {  # <workspace> <caller_surface> <direction
 # Grid placement for the new worker at existing-count N: resolve the direction and
 # anchor from grid_slot, then split off the anchor worker's own surface/workspace
 # (so a later column and a later window both split off the correct prior worker).
-# Falls back to splitting off firstmate if the anchor cannot be resolved.
+# Falls back to a fresh owned workspace if the anchor cannot be resolved, because
+# auto placement must never target the caller's workspace.
 fm_terminal_cmux_place_grid() {  # <workspace> <caller_surface> <exclude-id> <N>
-  local ws=$1 caller_surface=$2 exclude=$3 n=$4 slot dir anchor line anchor_ws anchor_surface
+  local exclude=$3 n=$4 slot dir anchor line anchor_ws anchor_surface
   slot=$(fm_terminal_cmux_grid_slot "$n")
   dir=${slot%% *}; anchor=${slot##* }
   if [ "$anchor" = caller ]; then
-    fm_terminal_cmux_split_off_caller "$ws" "$caller_surface" "$dir"
+    fm_terminal_cmux_place_workspace "$n"
     return
   fi
   line=$(fm_terminal_cmux_worker_slots "$exclude" | sed -n "$((anchor + 1))p")
   anchor_ws=$(printf '%s' "$line" | cut -f1)
   anchor_surface=$(printf '%s' "$line" | cut -f2)
   if [ -z "$anchor_surface" ]; then
-    fm_terminal_cmux_split_off_caller "$ws" "$caller_surface" "$dir"
+    fm_terminal_cmux_place_workspace "$n"
     return
   fi
-  [ -n "$anchor_ws" ] || anchor_ws=$ws
+  if [ -z "$anchor_ws" ]; then
+    fm_terminal_cmux_place_workspace "$n"
+    return
+  fi
   cmux new-split "$dir" --workspace "$anchor_ws" --surface "$anchor_surface" --focus false 2>&1
 }
 
@@ -267,8 +270,8 @@ fm_terminal_cmux_place_workspace() {  # <N>
 # Create the worker surface per the resolved layout and echo cmux's output so the
 # caller can grep out surface:N (and, for the workspace overflow path, workspace:N
 # plus owned_workspace=1). Never
-# steals focus. splits/tabs/hybrid keep their pre-grid shapes; auto tiles a grid
-# and overflows to a new same-window workspace when the grid is full.
+# steals focus. splits/tabs/hybrid keep their pre-grid shapes; auto tiles in
+# owned same-window workspaces and starts a new workspace when each grid fills.
 fm_terminal_cmux_place_worker() {  # <workspace> <caller_surface> <layout> <exclude-id>
   local ws=$1 caller_surface=$2 layout=$3 exclude=$4 n action pane
   n=$(fm_terminal_cmux_worker_count "$exclude") || return 1

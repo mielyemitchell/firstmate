@@ -101,16 +101,25 @@ seed_cmux_workers() {  # <count> [pane]
 
 # Seed <count> existing cmux workers with distinct, creation-ordered surfaces
 # (surface:11, surface:12, ...) so grid anchor assertions are unambiguous vs the
-# firstmate caller surface. No workspace is recorded, so grid placement falls back
-# to the passed workspace (a single-window grid). Clears prior worker metas first.
-seed_grid_workers() {  # <count>
-  local count=$1 i=1
+# firstmate caller surface. By default they record the owned crew workspace used
+# by the first auto grid. Pass "none" to omit workspace and exercise the safe
+# missing-anchor fallback. Clears prior worker metas first.
+seed_grid_workers() {  # <count> [workspace|none]
+  local count=$1 workspace=${2:-workspace:9} i=1
   rm -f "$STATE_DIR"/*.meta
   while [ "$i" -le "$count" ]; do
-    fm_write_meta "$STATE_DIR/gw-$i.meta" \
-      'terminal_backend=cmux' \
-      "surface=surface:$((10 + i))" \
-      'kind=ship'
+    if [ "$workspace" = none ]; then
+      fm_write_meta "$STATE_DIR/gw-$i.meta" \
+        'terminal_backend=cmux' \
+        "surface=surface:$((10 + i))" \
+        'kind=ship'
+    else
+      fm_write_meta "$STATE_DIR/gw-$i.meta" \
+        'terminal_backend=cmux' \
+        "surface=surface:$((10 + i))" \
+        "workspace=$workspace" \
+        'kind=ship'
+    fi
     i=$((i + 1))
   done
 }
@@ -121,6 +130,12 @@ place() {  # <workspace> <caller_surface> <layout> <exclude-id>
     bash -c '. "$1"; shift; fm_terminal_cmux_place_worker "$@"' _ "$ROOT/bin/fm-terminal-lib.sh" "$@"
 }
 
+assert_auto_never_targets_caller() {
+  assert_no_grep '--workspace workspace:1' "$LOG" "auto placement targeted the caller workspace"
+  assert_no_grep '--surface surface:5' "$LOG" "auto placement split off the caller surface"
+  assert_no_grep 'new-pane --type terminal' "$LOG" "auto placement fell back to a caller workspace pane"
+}
+
 # Run a pure lib function (no cmux) for the arithmetic unit tests.
 action() { FM_CONFIG_OVERRIDE="$CONFIG_DIR" bash -c '. "$1"; fm_terminal_cmux_layout_action "$2" "$3"' _ "$ROOT/bin/fm-terminal-lib.sh" "$@"; }
 slot() { FM_CONFIG_OVERRIDE="$CONFIG_DIR" bash -c '. "$1"; fm_terminal_cmux_grid_slot "$2"' _ "$ROOT/bin/fm-terminal-lib.sh" "$@"; }
@@ -128,12 +143,15 @@ capacity() { FM_CONFIG_OVERRIDE="$CONFIG_DIR" bash -c '. "$1"; fm_terminal_cmux_
 
 test_layout_action_grid_and_workspace() {
   local a n
-  # auto: grid within a workspace, overflow to a new workspace each time it fills (cap 4).
-  for n in 0 1 2 3; do a=$(action auto "$n"); [ "$a" = grid ] || fail "auto N=$n expected grid, got '$a'"; done
+  # auto: every grid starts in a workspace, including the first worker (cap 4).
+  a=$(action auto 0); [ "$a" = workspace ] || fail "auto N=0 expected workspace, got '$a'"
+  for n in 1 2 3; do a=$(action auto "$n"); [ "$a" = grid ] || fail "auto N=$n expected grid, got '$a'"; done
   a=$(action auto 4); [ "$a" = workspace ] || fail "auto N=4 expected workspace, got '$a'"
   for n in 5 6 7; do a=$(action auto "$n"); [ "$a" = grid ] || fail "auto N=$n expected grid, got '$a'"; done
   a=$(action auto 8); [ "$a" = workspace ] || fail "auto N=8 expected workspace, got '$a'"
   # capacity is tunable: at cap 2, the boundary moves to N=2.
+  a=$(FM_CMUX_GRID_CAPACITY=2 bash -c '. "$1"; fm_terminal_cmux_layout_action "$2" "$3"' _ "$ROOT/bin/fm-terminal-lib.sh" auto 0)
+  [ "$a" = workspace ] || fail "auto N=0 at capacity 2 expected workspace, got '$a'"
   a=$(FM_CMUX_GRID_CAPACITY=2 bash -c '. "$1"; fm_terminal_cmux_layout_action "$2" "$3"' _ "$ROOT/bin/fm-terminal-lib.sh" auto 2)
   [ "$a" = workspace ] || fail "auto N=2 at capacity 2 expected workspace, got '$a'"
   # splits/tabs/hybrid keep their pre-grid shapes.
@@ -142,12 +160,13 @@ test_layout_action_grid_and_workspace() {
   a=$(action tabs 1); [ "$a" = tab ] || fail "tabs N=1 expected tab, got '$a'"
   a=$(action hybrid 2); [ "$a" = split ] || fail "hybrid N=2 expected split, got '$a'"
   a=$(action hybrid 3); [ "$a" = tab ] || fail "hybrid N=3 expected tab, got '$a'"
-  pass "layout_action: auto grid/workspace boundary at capacity (tunable); splits/tabs/hybrid unchanged"
+  pass "layout_action: auto starts every grid in an owned workspace; splits/tabs/hybrid unchanged"
 }
 
 test_grid_slot_arithmetic() {
   local s
-  # First grid (2x2): right off firstmate, down off W1, right off W1, down off W3.
+  # First grid arithmetic (2x2): the caller case remains defensive, but auto
+  # placement now starts worker 1 with a workspace so slot 0 is not used there.
   s=$(slot 0); [ "$s" = 'right caller' ] || fail "slot 0 expected 'right caller', got '$s'"
   s=$(slot 1); [ "$s" = 'down 0' ] || fail "slot 1 expected 'down 0', got '$s'"
   s=$(slot 2); [ "$s" = 'right 0' ] || fail "slot 2 expected 'right 0', got '$s'"
@@ -156,7 +175,7 @@ test_grid_slot_arithmetic() {
   s=$(slot 5); [ "$s" = 'down 4' ] || fail "slot 5 expected 'down 4', got '$s'"
   s=$(slot 6); [ "$s" = 'right 4' ] || fail "slot 6 expected 'right 4', got '$s'"
   s=$(slot 7); [ "$s" = 'down 6' ] || fail "slot 7 expected 'down 6', got '$s'"
-  pass "grid_slot: right/down alternation, caller anchor only for worker 1, global anchors across workspaces"
+  pass "grid_slot: right/down alternation with global anchors across workspaces"
 }
 
 test_grid_capacity_env_config_default_precedence() {
@@ -180,32 +199,37 @@ test_grid_capacity_env_config_default_precedence() {
 }
 
 test_auto_grid_then_workspace_overflow() {
-  # Worker 1 (0 existing): split RIGHT off firstmate's caller surface (top-right).
+  # Worker 1 (0 existing): create the owned first crew workspace.
   seed_grid_workers 0; : > "$LOG"
-  place workspace:1 surface:5 auto newtask >/dev/null || fail "auto grid placement failed at N=0"
-  assert_grep 'new-split right --workspace workspace:1 --surface surface:5 --focus false' "$LOG" "grid worker 1 was not a right split off firstmate"
+  out=$(place workspace:1 surface:5 auto newtask) || fail "auto workspace placement failed at N=0"
+  assert_grep 'current-window' "$LOG" "grid worker 1 did not resolve the current window explicitly"
+  assert_grep 'new-workspace --name fm crew 1 --window E566A1D2-0000-0000-0000-000000000002 --focus false' "$LOG" "grid worker 1 did not create the first named crew workspace"
+  assert_contains "$out" 'workspace:9' "first crew workspace placement did not echo the workspace"
+  assert_contains "$out" 'owned_workspace=1' "first crew workspace placement did not echo ownership"
+  assert_auto_never_targets_caller
   assert_no_grep 'new-window' "$LOG" "grid worker 1 wrongly opened a new window"
   assert_no_grep 'new-surface' "$LOG" "grid worker 1 overflowed to a tab"
   # Worker 2 (1 existing): split DOWN off worker 1 (surface:11) -> bottom of column 1.
   seed_grid_workers 1; : > "$LOG"; place workspace:1 surface:5 auto newtask >/dev/null
-  assert_grep 'new-split down --workspace workspace:1 --surface surface:11 --focus false' "$LOG" "grid worker 2 did not split down off worker 1"
+  assert_grep 'new-split down --workspace workspace:9 --surface surface:11 --focus false' "$LOG" "grid worker 2 did not split down off worker 1 inside the crew workspace"
+  assert_auto_never_targets_caller
   # Worker 3 (2 existing): split RIGHT off worker 1 (surface:11) -> top of column 2.
   seed_grid_workers 2; : > "$LOG"; place workspace:1 surface:5 auto newtask >/dev/null
-  assert_grep 'new-split right --workspace workspace:1 --surface surface:11 --focus false' "$LOG" "grid worker 3 did not split right off worker 1"
+  assert_grep 'new-split right --workspace workspace:9 --surface surface:11 --focus false' "$LOG" "grid worker 3 did not split right off worker 1 inside the crew workspace"
+  assert_auto_never_targets_caller
   # Worker 4 (3 existing): split DOWN off worker 3 (surface:13) -> bottom of column 2.
   seed_grid_workers 3; : > "$LOG"; place workspace:1 surface:5 auto newtask >/dev/null
-  assert_grep 'new-split down --workspace workspace:1 --surface surface:13 --focus false' "$LOG" "grid worker 4 did not split down off worker 3"
-  # firstmate's own surface (surface:5) anchors ONLY worker 1: later workers split
-  # off prior WORKERS, so firstmate is pinned left and never sliced into a strip.
-  assert_no_grep 'surface:5' "$LOG" "grid worker 4 sliced firstmate's own surface"
+  assert_grep 'new-split down --workspace workspace:9 --surface surface:13 --focus false' "$LOG" "grid worker 4 did not split down off worker 3 inside the crew workspace"
+  assert_auto_never_targets_caller
   # Worker 5 (4 existing = capacity): overflow to a NEW workspace, not a split/tab/window.
   seed_grid_workers 4; : > "$LOG"; place workspace:1 surface:5 auto newtask >/dev/null
   assert_grep 'current-window' "$LOG" "grid worker 5 did not resolve the current window explicitly"
   assert_grep 'new-workspace --name fm crew 2 --window E566A1D2-0000-0000-0000-000000000002 --focus false' "$LOG" "grid worker 5 did not overflow to a named workspace in the current window"
+  assert_auto_never_targets_caller
   assert_no_grep 'new-window' "$LOG" "grid worker 5 wrongly opened a new OS window"
   assert_no_grep 'new-split' "$LOG" "grid worker 5 wrongly created a split at capacity"
   assert_no_grep 'new-surface' "$LOG" "grid worker 5 wrongly created a tab at capacity"
-  pass "auto layout: 2x2 grid (right/down/right/down off firstmate then workers), same-window workspace at capacity"
+  pass "auto layout: owned fm crew workspaces from worker 1, grid cells stay inside them"
 }
 
 test_auto_overflow_workspace_shape() {
@@ -224,6 +248,16 @@ test_auto_overflow_workspace_shape() {
   assert_contains "$out" 'workspace:9' "workspace placement did not echo the overflow workspace"
   assert_contains "$out" 'owned_workspace=1' "workspace placement did not echo the owned workspace marker"
   pass "auto overflow: named same-window workspace using explicit current-window, echoing surface + workspace + ownership"
+}
+
+test_auto_missing_anchor_starts_owned_workspace() {
+  seed_grid_workers 1 none; : > "$LOG"
+  local out
+  out=$(place workspace:1 surface:5 auto newtask) || fail "missing-anchor auto fallback failed"
+  assert_grep 'new-workspace --name fm crew 1 --window E566A1D2-0000-0000-0000-000000000002 --focus false' "$LOG" "missing-anchor fallback did not start an owned crew workspace"
+  assert_contains "$out" 'owned_workspace=1' "missing-anchor fallback did not echo ownership"
+  assert_auto_never_targets_caller
+  pass "auto fallback: missing grid anchors start an owned workspace, never caller placement"
 }
 
 test_grid_anchor_uses_recorded_workspace() {
@@ -264,9 +298,9 @@ test_explicit_layout_modes() {
 }
 
 test_focus_never_stolen() {
-  # grid split off firstmate (worker 1) passes --focus false
+  # first auto worker creates an owned workspace with --focus false
   seed_grid_workers 0; : > "$LOG"; place workspace:1 surface:5 auto newtask >/dev/null
-  assert_grep 'new-split right --workspace workspace:1 --surface surface:5 --focus false' "$LOG" "grid split placement stole focus"
+  assert_grep 'new-workspace --name fm crew 1 --window E566A1D2-0000-0000-0000-000000000002 --focus false' "$LOG" "first auto workspace placement stole focus"
   # a later grid split (worker 4) also passes --focus false
   seed_grid_workers 3; : > "$LOG"; place workspace:1 surface:5 auto newtask >/dev/null
   assert_grep '--focus false' "$LOG" "later grid split did not pass --focus false"
@@ -278,9 +312,9 @@ test_focus_never_stolen() {
   # tab overflow (explicit tabs layout) passes --focus false
   seed_cmux_workers 1; : > "$LOG"; place workspace:1 surface:1 tabs newtask >/dev/null
   assert_grep '--focus false' "$LOG" "tab placement did not pass --focus false"
-  # no caller surface -> new-pane fallback, still --focus false
-  seed_grid_workers 0; : > "$LOG"; place workspace:1 '' auto newtask >/dev/null
-  assert_grep 'new-pane --type terminal --direction right --workspace workspace:1 --focus false' "$LOG" "empty caller surface did not fall back to new-pane"
+  # forced split with no caller surface still keeps the old new-pane fallback.
+  seed_cmux_workers 0; : > "$LOG"; place workspace:1 '' splits newtask >/dev/null
+  assert_grep 'new-pane --type terminal --direction right --workspace workspace:1 --focus false' "$LOG" "forced split empty-caller fallback did not pass --focus false"
   pass "placement never steals focus (--focus false on grid splits, workspace overflow, tab, and fallback pane)"
 }
 
@@ -422,6 +456,7 @@ test_grid_slot_arithmetic
 test_grid_capacity_env_config_default_precedence
 test_auto_grid_then_workspace_overflow
 test_auto_overflow_workspace_shape
+test_auto_missing_anchor_starts_owned_workspace
 test_grid_anchor_uses_recorded_workspace
 test_explicit_layout_modes
 test_focus_never_stolen
