@@ -36,36 +36,37 @@ fm_terminal_config_backend() {  # -> tmux|cmux
 # already has. Mielye default (auto): firstmate's own pane stays pinned on the
 # LEFT and is never sliced into a strip; workers tile into a 2-row grid to its
 # right (a 2x2 for the default capacity of 4). When the grid is full the next
-# worker opens a NEW cmux window and the grid fills again there. Explicit
+# worker opens a NEW cmux workspace in firstmate's current window and the grid
+# fills again there. Explicit
 # config/cmux-layout values force one shape:
 #   splits - a visible right-split off firstmate per worker (vertical strips).
 #   tabs   - one crew pane (first worker splits) then worker tabs.
 #   hybrid - split up to FM_CMUX_SPLIT_THRESHOLD, then tab overflow (the pre-grid
 #            "auto" behaviour, kept available under its own name).
-#   auto   - grid + new-window overflow (the new default described above).
+#   auto   - grid + same-window workspace overflow (the default described above).
 #
 # Grid tiling detail (auto), column-major over FM_CMUX_GRID_ROWS rows:
 #   worker 1 -> new-split right off firstmate's caller surface (top-right cell)
 #   worker 2 -> new-split down off worker 1  (bottom of column 1)
 #   worker 3 -> new-split right off worker 1 (top of column 2)
 #   worker 4 -> new-split down off worker 3  (bottom of column 2)
-#   worker 5 -> new cmux window (grid at capacity); `cmux new-window` auto-creates
-#              a default workspace + terminal surface in that window (resolved via
-#              `cmux identify`, not a separate new-workspace/new-pane call), then
-#              the grid fills again there.
+#   worker 5 -> new named workspace in firstmate's current window (grid at
+#              capacity); `cmux new-workspace` creates the first terminal surface
+#              for that workspace, then the grid fills again there.
 # Anchors are resolved from the recorded worker surfaces/workspaces in
 # state/*.meta, ordered by cmux's monotonically-increasing surface ref (a later
 # worker gets a higher surface number), so the ordering is stable across meta
-# appends and across windows.
+# appends and across workspaces.
 #
 # FM_CMUX_SPLIT_THRESHOLD is the max number of EXISTING workers that still get a
 # split under hybrid: a new worker splits while count < threshold and overflows
 # to a tab once count >= threshold (so with 3, workers 1-3 split and worker 4+
 # tabs). Named so it is obvious and tunable.
 FM_CMUX_SPLIT_THRESHOLD=${FM_CMUX_SPLIT_THRESHOLD:-3}
-# FM_CMUX_GRID_CAPACITY is how many workers fill one grid (one window) before the
-# next worker overflows to a new window. Default 4 = the 2x2 grid.
-FM_CMUX_GRID_CAPACITY=${FM_CMUX_GRID_CAPACITY:-4}
+# FM_CMUX_GRID_CAPACITY is how many workers fill one grid before the next worker
+# overflows to a new same-window workspace. Env overrides config/cmux-grid-capacity;
+# invalid or non-positive values fall back to 4.
+FM_CMUX_GRID_CAPACITY_DEFAULT=4
 # FM_CMUX_GRID_ROWS is the grid height (rows per column). The grid fills
 # column-major: each column is filled top-to-bottom before the next column opens
 # to its right. Default 2 gives the 2x2 grid at the default capacity.
@@ -79,6 +80,18 @@ fm_terminal_cmux_layout() {  # -> splits|tabs|hybrid|auto
   case "$raw" in
     splits|tabs|hybrid|auto) printf '%s\n' "$raw" ;;
     *) echo "error: invalid cmux layout '$raw' in $config_dir/cmux-layout (expected splits, tabs, hybrid, or auto)" >&2; return 2 ;;
+  esac
+}
+
+fm_terminal_cmux_grid_capacity() {  # -> positive integer
+  local config_dir=${FM_CONFIG_OVERRIDE:-${CONFIG:-${FM_HOME:-}/config}} raw
+  raw=${FM_CMUX_GRID_CAPACITY:-}
+  if [ -z "$raw" ] && [ -n "$config_dir" ] && [ -f "$config_dir/cmux-grid-capacity" ]; then
+    raw=$(tr -d '[:space:]' < "$config_dir/cmux-grid-capacity")
+  fi
+  case "$raw" in
+    ''|*[!0-9]*) printf '%s\n' "$FM_CMUX_GRID_CAPACITY_DEFAULT" ;;
+    *) if [ "$raw" -gt 0 ] 2>/dev/null; then printf '%s\n' "$raw"; else printf '%s\n' "$FM_CMUX_GRID_CAPACITY_DEFAULT"; fi ;;
   esac
 }
 
@@ -102,10 +115,10 @@ fm_terminal_cmux_worker_count() {  # <exclude-id> -> N
 # Decide placement for a new worker. N is the existing cmux worker count.
 # Returns: split (right-split off firstmate), tab (overflow surface in a worker
 # pane), grid (auto grid placement, resolve direction+anchor via grid_slot), or
-# window (auto overflow to a new cmux window).
-fm_terminal_cmux_layout_action() {  # <layout> <N> -> split|tab|grid|window
-  local layout=$1 n=$2 cap=${FM_CMUX_GRID_CAPACITY:-4}
-  [ "$cap" -ge 1 ] 2>/dev/null || cap=4
+# workspace (auto overflow to a new cmux workspace in the current window).
+fm_terminal_cmux_layout_action() {  # <layout> <N> -> split|tab|grid|workspace
+  local layout=$1 n=$2 cap
+  cap=$(fm_terminal_cmux_grid_capacity)
   case "$layout" in
     splits) printf 'split\n' ;;
     # tabs: the first worker still opens a visible split to create the crew pane;
@@ -113,8 +126,8 @@ fm_terminal_cmux_layout_action() {  # <layout> <N> -> split|tab|grid|window
     tabs) [ "$n" -eq 0 ] && printf 'split\n' || printf 'tab\n' ;;
     # hybrid: the pre-grid default - split up to the threshold, then tab overflow.
     hybrid) [ "$n" -lt "$FM_CMUX_SPLIT_THRESHOLD" ] && printf 'split\n' || printf 'tab\n' ;;
-    # auto: grid placement, overflowing to a new window each time the grid fills.
-    *) if [ "$n" -gt 0 ] && [ $((n % cap)) -eq 0 ]; then printf 'window\n'; else printf 'grid\n'; fi ;;
+    # auto: grid placement, overflowing to a new workspace each time the grid fills.
+    *) if [ "$n" -gt 0 ] && [ $((n % cap)) -eq 0 ]; then printf 'workspace\n'; else printf 'grid\n'; fi ;;
   esac
 }
 
@@ -125,8 +138,8 @@ fm_terminal_cmux_layout_action() {  # <layout> <N> -> split|tab|grid|window
 # surface, only the very first worker) or a 0-based creation-order index into the
 # existing worker surfaces (see fm_terminal_cmux_worker_slots).
 fm_terminal_cmux_grid_slot() {  # <N> -> "<left|right|up|down> <caller|index>"
-  local n=$1 cap=${FM_CMUX_GRID_CAPACITY:-4} rows=${FM_CMUX_GRID_ROWS:-2} p g col row
-  [ "$cap" -ge 1 ] 2>/dev/null || cap=4
+  local n=$1 rows=${FM_CMUX_GRID_ROWS:-2} cap p g col row
+  cap=$(fm_terminal_cmux_grid_capacity)
   [ "$rows" -ge 1 ] 2>/dev/null || rows=2
   p=$((n % cap)); g=$((n / cap)); col=$((p / rows)); row=$((p % rows))
   if [ "$row" -eq 0 ]; then
@@ -148,7 +161,7 @@ fm_terminal_cmux_grid_slot() {  # <N> -> "<left|right|up|down> <caller|index>"
 # Ordered existing cmux worker (workspace, surface) pairs in creation order,
 # excluding <exclude-id>. Creation order is the numeric surface ref, which cmux
 # assigns monotonically per session (a later worker gets a higher number), so it
-# is stable across meta appends (unlike file mtime) and across windows (surface
+# is stable across meta appends (unlike file mtime) and across workspaces (surface
 # refs are global). One "<workspace>\t<surface>" per line; workspace may be empty
 # when a meta recorded none, in which case the caller falls back to its own
 # workspace. This is the anchor source for grid placement.
@@ -224,36 +237,38 @@ fm_terminal_cmux_place_grid() {  # <workspace> <caller_surface> <exclude-id> <N>
   cmux new-split "$dir" --workspace "$anchor_ws" --surface "$anchor_surface" --focus false 2>&1
 }
 
-# Overflow to a NEW cmux window. `cmux new-window` prints a bare "OK <uuid>" (NOT
-# a "window:N" short ref like every other placement command here), so capture the
-# raw handle rather than grepping for a short ref that will never appear. It also
-# auto-creates a default workspace + terminal surface in the new window and takes
-# focus there - the one placement command with no --focus flag - so the correct
-# follow-up is `cmux identify`, which resolves that now-focused window's
-# auto-created workspace/surface directly. Do not call `cmux new-workspace`/
-# `cmux new-pane` here: that would create a SECOND, unwanted workspace/surface on
-# top of the one new-window already made, and an accidentally empty --window arg
-# on new-workspace silently retargets the current/live window instead of the new
-# one. Echoes a single normalized "<surface:N> <workspace:N>" line so the caller
-# captures BOTH the new surface and the new window's workspace (which differs
-# from firstmate's).
-fm_terminal_cmux_place_new_window() {
-  local win_out win ident_out ws surface
-  win_out=$(cmux new-window 2>&1) || { printf '%s\n' "$win_out" >&2; return 1; }
-  win=$(printf '%s\n' "$win_out" | tail -1 | awk '{print $NF}')
-  [ -n "$win" ] || { echo "error: cmux new-window did not report a window ref: $win_out" >&2; return 1; }
-  ident_out=$(cmux identify --json 2>&1) || { printf '%s\n' "$ident_out" >&2; return 1; }
-  ws=$(printf '%s\n' "$ident_out" | grep -o 'workspace:[0-9][0-9]*' | tail -1 || true)
-  [ -n "$ws" ] || { echo "error: cmux identify did not report a workspace ref for new window $win: $ident_out" >&2; return 1; }
-  surface=$(printf '%s\n' "$ident_out" | grep -o 'surface:[0-9][0-9]*' | tail -1 || true)
-  [ -n "$surface" ] || { echo "error: cmux identify did not report a surface ref for new window $win: $ident_out" >&2; return 1; }
-  printf '%s %s\n' "$surface" "$ws"
+# Overflow to a NEW named cmux workspace in firstmate's current window. Never
+# pass an empty --window: resolve the current window explicitly first. cmux
+# current-window may print a bare UUID rather than a window:N ref, and
+# new-workspace accepts either. Echo a normalized "<surface:N> <workspace:N>" line
+# plus owned_workspace=1 so spawn can record cleanup ownership in task meta.
+fm_terminal_cmux_place_workspace() {  # <N>
+  local n=$1 cap grid_index name win ws_out ws surface pane surfaces
+  cap=$(fm_terminal_cmux_grid_capacity)
+  grid_index=$((n / cap + 1))
+  name="fm crew $grid_index"
+  win=$(cmux current-window 2>/dev/null | tail -1 | awk '{print $NF}') || win=
+  [ -n "$win" ] || { echo "error: cmux current-window did not report a window ref" >&2; return 1; }
+  ws_out=$(cmux new-workspace --name "$name" --window "$win" --focus false 2>&1) || { printf '%s\n' "$ws_out" >&2; return 1; }
+  ws=$(printf '%s\n' "$ws_out" | grep -o 'workspace:[0-9][0-9]*' | tail -1 || true)
+  [ -n "$ws" ] || { echo "error: cmux new-workspace did not report a workspace ref for $name in $win: $ws_out" >&2; return 1; }
+  surface=$(printf '%s\n' "$ws_out" | grep -o 'surface:[0-9][0-9]*' | tail -1 || true)
+  if [ -z "$surface" ]; then
+    for pane in $(cmux list-panes --workspace "$ws" 2>/dev/null | grep -o 'pane:[0-9][0-9]*'); do
+      surfaces=$(cmux list-pane-surfaces --workspace "$ws" --pane "$pane" 2>/dev/null | grep -o 'surface:[0-9][0-9]*' || true)
+      surface=$(printf '%s\n' "$surfaces" | head -1)
+      [ -n "$surface" ] && break
+    done
+  fi
+  [ -n "$surface" ] || { echo "error: cmux new-workspace did not create or report a terminal surface for $name in $win: $ws_out" >&2; return 1; }
+  printf '%s %s\nowned_workspace=1\n' "$surface" "$ws"
 }
 
 # Create the worker surface per the resolved layout and echo cmux's output so the
-# caller can grep out surface:N (and, for the new-window path, workspace:N). Never
+# caller can grep out surface:N (and, for the workspace overflow path, workspace:N
+# plus owned_workspace=1). Never
 # steals focus. splits/tabs/hybrid keep their pre-grid shapes; auto tiles a grid
-# and overflows to a new window when the grid is full.
+# and overflows to a new same-window workspace when the grid is full.
 fm_terminal_cmux_place_worker() {  # <workspace> <caller_surface> <layout> <exclude-id>
   local ws=$1 caller_surface=$2 layout=$3 exclude=$4 n action pane
   n=$(fm_terminal_cmux_worker_count "$exclude") || return 1
@@ -264,7 +279,7 @@ fm_terminal_cmux_place_worker() {  # <workspace> <caller_surface> <layout> <excl
   case "$action" in
     tab)    cmux new-surface --type terminal --pane "$pane" --workspace "$ws" --focus false 2>&1 ;;
     grid)   fm_terminal_cmux_place_grid "$ws" "$caller_surface" "$exclude" "$n" ;;
-    window) fm_terminal_cmux_place_new_window ;;
+    workspace) fm_terminal_cmux_place_workspace "$n" ;;
     *)      fm_terminal_cmux_split_off_caller "$ws" "$caller_surface" right ;;
   esac
 }

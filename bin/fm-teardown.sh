@@ -95,6 +95,28 @@ meta_value() {
   grep "^$key=" "$meta" | cut -d= -f2- || true
 }
 
+cmux_workspace_still_referenced() {  # <workspace> <current-meta>
+  local workspace=$1 current_meta=$2 meta
+  [ -n "$workspace" ] || return 1
+  for meta in "$STATE"/*.meta; do
+    [ -f "$meta" ] || continue
+    [ "$meta" = "$current_meta" ] && continue
+    [ "$(meta_value "$meta" workspace)" = "$workspace" ] && return 0
+  done
+  return 1
+}
+
+close_owned_cmux_workspace_if_empty() {  # <meta>
+  local meta=$1 workspace close_out
+  [ "$(meta_value "$meta" owned_workspace)" = 1 ] || return 0
+  workspace=$(meta_value "$meta" workspace)
+  [ -n "$workspace" ] || return 0
+  cmux_workspace_still_referenced "$workspace" "$meta" && return 0
+  close_out=$(cmux close-workspace --workspace "$workspace" 2>&1) && return 0
+  echo "warning: could not close owned cmux workspace $workspace for $ID; leftover workspace remains: $close_out" >&2
+  return 0
+}
+
 remove_grok_turnend_auth() {
   local state_dir=$1 id=$2 token hooks_dir
   token=$(cat "$state_dir/$id.grok-turnend-token" 2>/dev/null || true)
@@ -664,6 +686,8 @@ if [ "$BACKEND" = cmux ]; then
   if ! fm_terminal_close "fm-$ID" 2>/dev/null; then
     echo "warning: could not close cmux surface for $ID; preserving $META for manual cleanup" >&2
     CLOSE_FAILED=1
+  else
+    close_owned_cmux_workspace_if_empty "$META"
   fi
 else
   [ -n "$T" ] && tmux kill-window -t "$T" 2>/dev/null || true

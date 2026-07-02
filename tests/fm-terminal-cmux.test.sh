@@ -19,14 +19,21 @@ printf '%s\n' "$*" >> "$CMUX_FAKE_LOG"
 case "$1" in
   ping) exit 0 ;;
   read-screen) printf 'done: fake cmux output\n'; exit 0 ;;
-  send|send-key|close-surface) printf 'OK surface:2 workspace:1\n'; exit 0 ;;
+  send|send-key|close-surface|close-workspace) printf 'OK surface:2 workspace:1\n'; exit 0 ;;
   new-split|new-pane|new-surface) printf 'created surface:7 workspace:1\n'; exit 0 ;;
-  # Real cmux new-window prints a bare "OK <uuid>", never a window:N short ref.
-  new-window) printf 'OK E566A1D2-0000-0000-0000-000000000002\n'; exit 0 ;;
-  current-window) printf 'window:2\n'; exit 0 ;;
-  new-workspace) printf 'created workspace:9\n'; exit 0 ;;
-  # new-window auto-creates a default workspace + terminal surface and focuses the
-  # new window, so identify (called with no --window override) resolves them.
+  new-window) echo 'new-window must not be used for cmux auto overflow' >&2; exit 99 ;;
+  current-window) printf 'E566A1D2-0000-0000-0000-000000000002\n'; exit 0 ;;
+  new-workspace)
+    win_seen=0; win_value=
+    prev=
+    for arg in "$@"; do
+      if [ "$prev" = "--window" ]; then win_seen=1; win_value=$arg; fi
+      prev=$arg
+    done
+    [ "$win_seen" = 1 ] && [ -n "$win_value" ] || { echo 'missing explicit --window' >&2; exit 98; }
+    printf 'created workspace:9 surface:7\n'
+    exit 0
+    ;;
   identify) printf '{"window":"window:2","workspace":"workspace:9","surface":"surface:7"}\n'; exit 0 ;;
   *) exit 0 ;;
 esac
@@ -115,26 +122,27 @@ place() {  # <workspace> <caller_surface> <layout> <exclude-id>
 }
 
 # Run a pure lib function (no cmux) for the arithmetic unit tests.
-action() { bash -c '. "$1"; fm_terminal_cmux_layout_action "$2" "$3"' _ "$ROOT/bin/fm-terminal-lib.sh" "$@"; }
-slot() { bash -c '. "$1"; fm_terminal_cmux_grid_slot "$2"' _ "$ROOT/bin/fm-terminal-lib.sh" "$@"; }
+action() { FM_CONFIG_OVERRIDE="$CONFIG_DIR" bash -c '. "$1"; fm_terminal_cmux_layout_action "$2" "$3"' _ "$ROOT/bin/fm-terminal-lib.sh" "$@"; }
+slot() { FM_CONFIG_OVERRIDE="$CONFIG_DIR" bash -c '. "$1"; fm_terminal_cmux_grid_slot "$2"' _ "$ROOT/bin/fm-terminal-lib.sh" "$@"; }
+capacity() { FM_CONFIG_OVERRIDE="$CONFIG_DIR" bash -c '. "$1"; fm_terminal_cmux_grid_capacity' _ "$ROOT/bin/fm-terminal-lib.sh"; }
 
-test_layout_action_grid_and_window() {
+test_layout_action_grid_and_workspace() {
   local a n
-  # auto: grid within a window, overflow to a new window each time it fills (cap 4).
+  # auto: grid within a workspace, overflow to a new workspace each time it fills (cap 4).
   for n in 0 1 2 3; do a=$(action auto "$n"); [ "$a" = grid ] || fail "auto N=$n expected grid, got '$a'"; done
-  a=$(action auto 4); [ "$a" = window ] || fail "auto N=4 expected window, got '$a'"
+  a=$(action auto 4); [ "$a" = workspace ] || fail "auto N=4 expected workspace, got '$a'"
   for n in 5 6 7; do a=$(action auto "$n"); [ "$a" = grid ] || fail "auto N=$n expected grid, got '$a'"; done
-  a=$(action auto 8); [ "$a" = window ] || fail "auto N=8 expected window, got '$a'"
+  a=$(action auto 8); [ "$a" = workspace ] || fail "auto N=8 expected workspace, got '$a'"
   # capacity is tunable: at cap 2, the boundary moves to N=2.
   a=$(FM_CMUX_GRID_CAPACITY=2 bash -c '. "$1"; fm_terminal_cmux_layout_action "$2" "$3"' _ "$ROOT/bin/fm-terminal-lib.sh" auto 2)
-  [ "$a" = window ] || fail "auto N=2 at capacity 2 expected window, got '$a'"
+  [ "$a" = workspace ] || fail "auto N=2 at capacity 2 expected workspace, got '$a'"
   # splits/tabs/hybrid keep their pre-grid shapes.
   a=$(action splits 5); [ "$a" = split ] || fail "splits expected split, got '$a'"
   a=$(action tabs 0); [ "$a" = split ] || fail "tabs N=0 expected split, got '$a'"
   a=$(action tabs 1); [ "$a" = tab ] || fail "tabs N=1 expected tab, got '$a'"
   a=$(action hybrid 2); [ "$a" = split ] || fail "hybrid N=2 expected split, got '$a'"
   a=$(action hybrid 3); [ "$a" = tab ] || fail "hybrid N=3 expected tab, got '$a'"
-  pass "layout_action: auto grid/window boundary at capacity (tunable); splits/tabs/hybrid unchanged"
+  pass "layout_action: auto grid/workspace boundary at capacity (tunable); splits/tabs/hybrid unchanged"
 }
 
 test_grid_slot_arithmetic() {
@@ -144,14 +152,34 @@ test_grid_slot_arithmetic() {
   s=$(slot 1); [ "$s" = 'down 0' ] || fail "slot 1 expected 'down 0', got '$s'"
   s=$(slot 2); [ "$s" = 'right 0' ] || fail "slot 2 expected 'right 0', got '$s'"
   s=$(slot 3); [ "$s" = 'down 2' ] || fail "slot 3 expected 'down 2', got '$s'"
-  # Second grid (a new window): anchors are GLOBAL creation indices, never caller.
+  # Second grid (a new workspace): anchors are GLOBAL creation indices, never caller.
   s=$(slot 5); [ "$s" = 'down 4' ] || fail "slot 5 expected 'down 4', got '$s'"
   s=$(slot 6); [ "$s" = 'right 4' ] || fail "slot 6 expected 'right 4', got '$s'"
   s=$(slot 7); [ "$s" = 'down 6' ] || fail "slot 7 expected 'down 6', got '$s'"
-  pass "grid_slot: right/down alternation, caller anchor only for worker 1, global anchors across windows"
+  pass "grid_slot: right/down alternation, caller anchor only for worker 1, global anchors across workspaces"
 }
 
-test_auto_grid_then_new_window() {
+test_grid_capacity_env_config_default_precedence() {
+  local c a s
+  rm -f "$CONFIG_DIR/cmux-grid-capacity"
+  c=$(capacity); [ "$c" = 4 ] || fail "default capacity expected 4, got '$c'"
+  printf '6\n' > "$CONFIG_DIR/cmux-grid-capacity"
+  c=$(capacity); [ "$c" = 6 ] || fail "config capacity expected 6, got '$c'"
+  c=$(FM_CMUX_GRID_CAPACITY=5 capacity); [ "$c" = 5 ] || fail "env capacity should override config (expected 5, got '$c')"
+  printf 'bogus\n' > "$CONFIG_DIR/cmux-grid-capacity"
+  c=$(capacity); [ "$c" = 4 ] || fail "invalid config capacity should fall back to 4, got '$c'"
+  printf '0\n' > "$CONFIG_DIR/cmux-grid-capacity"
+  c=$(capacity); [ "$c" = 4 ] || fail "non-positive config capacity should fall back to 4, got '$c'"
+  printf '6\n' > "$CONFIG_DIR/cmux-grid-capacity"
+  a=$(action auto 5); [ "$a" = grid ] || fail "cap=6 N=5 expected grid, got '$a'"
+  a=$(action auto 6); [ "$a" = workspace ] || fail "cap=6 N=6 expected workspace, got '$a'"
+  s=$(FM_CMUX_GRID_ROWS=2 slot 4); [ "$s" = 'right 2' ] || fail "cap=6 rows=2 slot 4 expected 'right 2', got '$s'"
+  s=$(FM_CMUX_GRID_ROWS=2 slot 5); [ "$s" = 'down 4' ] || fail "cap=6 rows=2 slot 5 expected 'down 4', got '$s'"
+  rm -f "$CONFIG_DIR/cmux-grid-capacity"
+  pass "grid capacity: env > config/cmux-grid-capacity > default 4; invalid falls back; cap=6 rows=2 math is column-major"
+}
+
+test_auto_grid_then_workspace_overflow() {
   # Worker 1 (0 existing): split RIGHT off firstmate's caller surface (top-right).
   seed_grid_workers 0; : > "$LOG"
   place workspace:1 surface:5 auto newtask >/dev/null || fail "auto grid placement failed at N=0"
@@ -170,61 +198,51 @@ test_auto_grid_then_new_window() {
   # firstmate's own surface (surface:5) anchors ONLY worker 1: later workers split
   # off prior WORKERS, so firstmate is pinned left and never sliced into a strip.
   assert_no_grep 'surface:5' "$LOG" "grid worker 4 sliced firstmate's own surface"
-  # Worker 5 (4 existing = capacity): overflow to a NEW window, not a split/tab.
+  # Worker 5 (4 existing = capacity): overflow to a NEW workspace, not a split/tab/window.
   seed_grid_workers 4; : > "$LOG"; place workspace:1 surface:5 auto newtask >/dev/null
-  assert_grep 'new-window' "$LOG" "grid worker 5 did not overflow to a new window at capacity"
+  assert_grep 'current-window' "$LOG" "grid worker 5 did not resolve the current window explicitly"
+  assert_grep 'new-workspace --name fm crew 2 --window E566A1D2-0000-0000-0000-000000000002 --focus false' "$LOG" "grid worker 5 did not overflow to a named workspace in the current window"
+  assert_no_grep 'new-window' "$LOG" "grid worker 5 wrongly opened a new OS window"
   assert_no_grep 'new-split' "$LOG" "grid worker 5 wrongly created a split at capacity"
   assert_no_grep 'new-surface' "$LOG" "grid worker 5 wrongly created a tab at capacity"
-  pass "auto layout: 2x2 grid (right/down/right/down off firstmate then workers), new window at capacity"
+  pass "auto layout: 2x2 grid (right/down/right/down off firstmate then workers), same-window workspace at capacity"
 }
 
-test_auto_overflow_new_window_shape() {
-  # At capacity the overflow creates a new window - cmux new-window auto-creates a
-  # default workspace + terminal surface in it and takes focus there, so placement
-  # reads those back via `cmux identify` instead of issuing its own new-workspace/
-  # new-pane calls (which would create a second, unwanted surface). It echoes both
-  # the new surface and the new window's workspace so the spawner addresses the
-  # worker in its own window.
+test_auto_overflow_workspace_shape() {
+  # At capacity the overflow creates a named workspace in firstmate's current
+  # window. It never passes an empty --window and never shells out to new-window.
+  # It echoes both the new surface and workspace so spawn addresses the worker in
+  # that overflow workspace, plus an ownership marker for teardown.
   seed_grid_workers 4; : > "$LOG"
   local out
-  out=$(place workspace:1 surface:5 auto newtask) || fail "new-window overflow placement failed"
-  assert_grep 'new-window' "$LOG" "overflow did not create a new window"
-  assert_grep 'identify' "$LOG" "overflow did not resolve the auto-created workspace/surface via cmux identify"
-  assert_no_grep 'new-workspace' "$LOG" "overflow wrongly created a second workspace (new-window already auto-creates one)"
-  assert_no_grep 'new-pane\|new-surface' "$LOG" "overflow wrongly created a second surface (new-window already auto-creates one)"
-  assert_contains "$out" 'surface:7' "new-window placement did not echo the worker surface"
-  assert_contains "$out" 'workspace:9' "new-window placement did not echo the new window's workspace"
-  pass "auto overflow: new window -> identify (auto-created workspace/surface), echoing the new surface + workspace"
-}
-
-test_new_window_parses_bare_uuid_not_short_ref() {
-  # cmux new-window prints a bare "OK <uuid>", never a "window:N" short ref (unlike
-  # every other placement command). Placement must still succeed off that uuid
-  # rather than grepping for a window:N pattern that will never match.
-  seed_grid_workers 4; : > "$LOG"
-  out=$(place workspace:1 surface:5 auto newtask) || fail "placement failed to parse a bare-uuid new-window response"
-  assert_contains "$out" 'surface:7' "bare-uuid new-window did not still resolve a worker surface"
-  assert_contains "$out" 'workspace:9' "bare-uuid new-window did not still resolve the new window's workspace"
-  pass "new-window overflow parses a bare UUID window ref, not a window:N short ref"
+  out=$(place workspace:1 surface:5 auto newtask) || fail "workspace overflow placement failed"
+  assert_no_grep 'new-window' "$LOG" "overflow invoked forbidden cmux new-window"
+  assert_grep 'current-window' "$LOG" "overflow did not explicitly resolve the current window"
+  assert_grep 'new-workspace --name fm crew 2 --window E566A1D2-0000-0000-0000-000000000002 --focus false' "$LOG" "overflow did not target the resolved current window with focus disabled"
+  assert_no_grep ' --window  ' "$LOG" "overflow passed an empty --window"
+  assert_contains "$out" 'surface:7' "workspace placement did not echo the worker surface"
+  assert_contains "$out" 'workspace:9' "workspace placement did not echo the overflow workspace"
+  assert_contains "$out" 'owned_workspace=1' "workspace placement did not echo the owned workspace marker"
+  pass "auto overflow: named same-window workspace using explicit current-window, echoing surface + workspace + ownership"
 }
 
 test_grid_anchor_uses_recorded_workspace() {
-  # A worker that lives in a new window records its own workspace. When a later
+  # A worker that lives in an overflow workspace records its own workspace. When a later
   # worker tiles beside it, the split must be addressed in THAT workspace, not
-  # firstmate's, so grid tiling is correct across windows.
+  # firstmate's, so grid tiling is correct across workspaces.
   rm -f "$STATE_DIR"/*.meta; : > "$LOG"
   local i=1
   while [ "$i" -le 4 ]; do
     fm_write_meta "$STATE_DIR/gw-$i.meta" 'terminal_backend=cmux' "surface=surface:$((10 + i))" 'workspace=workspace:1' 'kind=ship'
     i=$((i + 1))
   done
-  # Worker 5 lives in the NEW window's workspace:9.
+  # Worker 5 lives in the overflow workspace:9.
   fm_write_meta "$STATE_DIR/gw-5.meta" 'terminal_backend=cmux' 'surface=surface:15' 'workspace=workspace:9' 'kind=ship'
   # Worker 6 (5 existing): grid_slot(5) = 'down 4' -> split down off worker 5,
   # addressed in worker 5's own workspace (workspace:9).
   place workspace:1 surface:5 auto newtask >/dev/null
-  assert_grep 'new-split down --workspace workspace:9 --surface surface:15 --focus false' "$LOG" "second-window grid did not anchor in the prior worker's recorded workspace"
-  pass "grid anchors off the prior worker's own recorded workspace (correct across windows)"
+  assert_grep 'new-split down --workspace workspace:9 --surface surface:15 --focus false' "$LOG" "second-workspace grid did not anchor in the prior worker's recorded workspace"
+  pass "grid anchors off the prior worker's own recorded workspace (correct across workspaces)"
 }
 
 test_explicit_layout_modes() {
@@ -252,21 +270,18 @@ test_focus_never_stolen() {
   # a later grid split (worker 4) also passes --focus false
   seed_grid_workers 3; : > "$LOG"; place workspace:1 surface:5 auto newtask >/dev/null
   assert_grep '--focus false' "$LOG" "later grid split did not pass --focus false"
-  # new-window overflow: cmux new-window is bare and has no --focus flag (the one
-  # placement command that can take focus). Its auto-created workspace/surface are
-  # then read back with `cmux identify`, a read-only call with no focus
-  # implications and no further pane/workspace creation that could steal focus.
+  # workspace overflow: new-workspace explicitly targets firstmate's current window
+  # and passes --focus false.
   seed_grid_workers 4; : > "$LOG"; place workspace:1 surface:5 auto newtask >/dev/null
-  assert_grep 'new-window' "$LOG" "new-window overflow did not create a new window"
-  assert_grep 'identify' "$LOG" "new-window overflow did not resolve via cmux identify"
-  assert_no_grep 'new-split\|new-pane\|new-surface\|new-workspace' "$LOG" "new-window overflow issued an unnecessary focus-affecting command"
+  assert_grep 'new-workspace --name fm crew 2 --window E566A1D2-0000-0000-0000-000000000002 --focus false' "$LOG" "workspace overflow did not pass --focus false"
+  assert_no_grep 'new-window' "$LOG" "workspace overflow invoked forbidden new-window"
   # tab overflow (explicit tabs layout) passes --focus false
   seed_cmux_workers 1; : > "$LOG"; place workspace:1 surface:1 tabs newtask >/dev/null
   assert_grep '--focus false' "$LOG" "tab placement did not pass --focus false"
   # no caller surface -> new-pane fallback, still --focus false
   seed_grid_workers 0; : > "$LOG"; place workspace:1 '' auto newtask >/dev/null
   assert_grep 'new-pane --type terminal --direction right --workspace workspace:1 --focus false' "$LOG" "empty caller surface did not fall back to new-pane"
-  pass "placement never steals focus (--focus false on grid splits, new-window workspace/pane, tab, and fallback pane)"
+  pass "placement never steals focus (--focus false on grid splits, workspace overflow, tab, and fallback pane)"
 }
 
 test_invalid_layout_errors() {
@@ -280,15 +295,139 @@ test_invalid_layout_errors() {
   pass "invalid config/cmux-layout errors clearly"
 }
 
+test_spawn_source_records_owned_workspace_marker() {
+  grep -F 'grep '\''^owned_workspace=1$'\''' "$ROOT/bin/fm-spawn.sh" >/dev/null \
+    || fail "fm-spawn does not detect owned_workspace=1 from placement output"
+  grep -F 'echo "owned_workspace=1"' "$ROOT/bin/fm-spawn.sh" >/dev/null \
+    || fail "fm-spawn does not record owned_workspace=1 in meta"
+  pass "spawn records the owned workspace marker emitted by overflow placement"
+}
+
+# --- cmux teardown workspace cleanup ---------------------------------------
+
+make_teardown_root() {  # <case> <id> <marker:yes|no> <shared:yes|no>
+  local name=$1 id=$2 marker=$3 shared=$4 fake
+  fake="$TMP_ROOT/$name"
+  mkdir -p "$fake/bin" "$fake/state" "$fake/config" "$fake/fakebin"
+  ln -s "$ROOT/bin/fm-teardown.sh" "$fake/bin/fm-teardown.sh"
+  ln -s "$ROOT/bin/fm-terminal-lib.sh" "$fake/bin/fm-terminal-lib.sh"
+  ln -s "$ROOT/bin/fm-tmux-lib.sh" "$fake/bin/fm-tmux-lib.sh"
+  cat > "$fake/bin/fm-guard.sh" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$fake/bin/fm-guard.sh"
+  cat > "$fake/bin/fm-fleet-sync.sh" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$fake/bin/fm-fleet-sync.sh"
+  cat > "$fake/bin/fm-tasks-axi-lib.sh" <<'SH'
+fm_tasks_axi_backend_available() { return 1; }
+SH
+  cat > "$fake/fakebin/cmux" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$CMUX_FAKE_LOG"
+case "$1" in
+  close-surface) printf 'OK closed surface\n'; exit 0 ;;
+  close-workspace)
+    if [ "${CMUX_CLOSE_WORKSPACE_FAIL:-}" = 1 ]; then
+      echo 'simulated close-workspace failure' >&2
+      exit 42
+    fi
+    printf 'OK closed workspace\n'
+    exit 0
+    ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$fake/fakebin/cmux"
+  fm_write_meta "$fake/state/$id.meta" \
+    'terminal_backend=cmux' \
+    'workspace=workspace:9' \
+    'surface=surface:7' \
+    "worktree=$fake/nonexistent-wt" \
+    "project=$fake/nonexistent-project" \
+    'harness=pi' \
+    'kind=ship' \
+    'mode=local-only'
+  if [ "$marker" = yes ]; then
+    printf '%s\n' 'owned_workspace=1' >> "$fake/state/$id.meta"
+  fi
+  if [ "$shared" = yes ]; then
+    fm_write_meta "$fake/state/other.meta" \
+      'terminal_backend=cmux' \
+      'workspace=workspace:9' \
+      'surface=surface:8' \
+      'harness=pi' \
+      'kind=ship' \
+      'mode=local-only'
+  fi
+  printf '%s\n' "$fake"
+}
+
+run_teardown_case() {  # <fake-root> <id> [stderr-file]
+  local fake=$1 id=$2 err=${3:-/dev/null}
+  PATH="$fake/fakebin:$PATH" CMUX_FAKE_LOG="$LOG" CMUX_CLOSE_WORKSPACE_FAIL="${CMUX_CLOSE_WORKSPACE_FAIL:-}" FM_HOME="$fake" FM_STATE_OVERRIDE="$fake/state" FM_CONFIG_OVERRIDE="$fake/config" \
+    bash "$fake/bin/fm-teardown.sh" "$id" >"$fake/out" 2>"$err"
+}
+
+test_teardown_closes_owned_unshared_workspace() {
+  local fake
+  fake=$(make_teardown_root td-owned-close task-owned yes no)
+  : > "$LOG"
+  run_teardown_case "$fake" task-owned || fail "teardown failed for owned unshared workspace"
+  assert_grep 'close-surface --workspace workspace:9 --surface surface:7' "$LOG" "teardown did not close the worker surface"
+  assert_grep 'close-workspace --workspace workspace:9' "$LOG" "teardown did not close an owned unshared workspace"
+  pass "teardown closes an owned overflow workspace when no other live meta references it"
+}
+
+test_teardown_does_not_close_unmarked_workspace() {
+  local fake
+  fake=$(make_teardown_root td-unmarked task-unmarked no no)
+  : > "$LOG"
+  run_teardown_case "$fake" task-unmarked || fail "teardown failed for unmarked workspace"
+  assert_grep 'close-surface --workspace workspace:9 --surface surface:7' "$LOG" "teardown did not close the worker surface"
+  assert_no_grep 'close-workspace --workspace workspace:9' "$LOG" "teardown closed an unmarked workspace"
+  pass "teardown never closes a workspace without owned_workspace=1"
+}
+
+test_teardown_does_not_close_shared_owned_workspace() {
+  local fake
+  fake=$(make_teardown_root td-shared task-shared yes yes)
+  : > "$LOG"
+  run_teardown_case "$fake" task-shared || fail "teardown failed for shared owned workspace"
+  assert_grep 'close-surface --workspace workspace:9 --surface surface:7' "$LOG" "teardown did not close the worker surface"
+  assert_no_grep 'close-workspace --workspace workspace:9' "$LOG" "teardown closed a workspace still referenced by another live meta"
+  pass "teardown keeps an owned workspace open while another live task references it"
+}
+
+test_teardown_workspace_close_failure_is_nonfatal() {
+  local fake err
+  fake=$(make_teardown_root td-close-fail task-close-fail yes no)
+  err="$fake/err"
+  : > "$LOG"
+  CMUX_CLOSE_WORKSPACE_FAIL=1 run_teardown_case "$fake" task-close-fail "$err" \
+    || fail "teardown failed when close-workspace failed nonfatally"
+  assert_grep 'close-workspace --workspace workspace:9' "$LOG" "teardown did not attempt to close the owned workspace"
+  assert_grep 'leftover workspace remains' "$err" "teardown did not report the leftover workspace after close-workspace failed"
+  pass "teardown reports close-workspace failure but completes cleanup"
+}
+
 test_peek_uses_cmux_read_screen
 test_send_uses_cmux_send_and_newline
 test_send_key_maps_ctrl_c
-test_layout_action_grid_and_window
+test_layout_action_grid_and_workspace
 test_grid_slot_arithmetic
-test_auto_grid_then_new_window
-test_auto_overflow_new_window_shape
-test_new_window_parses_bare_uuid_not_short_ref
+test_grid_capacity_env_config_default_precedence
+test_auto_grid_then_workspace_overflow
+test_auto_overflow_workspace_shape
 test_grid_anchor_uses_recorded_workspace
 test_explicit_layout_modes
 test_focus_never_stolen
 test_invalid_layout_errors
+test_spawn_source_records_owned_workspace_marker
+test_teardown_closes_owned_unshared_workspace
+test_teardown_does_not_close_unmarked_workspace
+test_teardown_does_not_close_shared_owned_workspace
+test_teardown_workspace_close_failure_is_nonfatal

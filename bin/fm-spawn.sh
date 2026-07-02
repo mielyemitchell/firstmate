@@ -504,7 +504,7 @@ spawn_cmux_and_exit() {
   cmux ping >/dev/null 2>&1 || { echo "error: terminal backend is cmux but cmux is not reachable" >&2; exit 1; }
   command -v python3 >/dev/null 2>&1 || { echo "error: cmux backend needs python3 to parse cmux identify output" >&2; exit 1; }
 
-  local identify caller_ws caller_surface lease_out cmux_out surface worker_ws pane task_title layout
+  local identify caller_ws caller_surface lease_out cmux_out surface worker_ws pane task_title layout owned_workspace
   # Resolve the layout policy up front so an invalid config/cmux-layout fails fast,
   # before any treehouse lease or cmux surface is created.
   layout=$(fm_terminal_cmux_layout) || exit 1
@@ -537,9 +537,10 @@ spawn_cmux_and_exit() {
 
   task_title="fm-$ID"
   # Place the worker per the layout policy: under auto, tile a 2-row grid to the
-  # right of firstmate (2x2 for the default capacity) and overflow to a NEW cmux
-  # window once the grid is full; explicit splits/tabs/hybrid honored. Never steals
-  # focus. The first worker always opens a visible split off firstmate.
+  # right of firstmate (2x2 for the default capacity) and overflow to a NEW named
+  # cmux workspace in firstmate's current window once the grid is full; explicit
+  # splits/tabs/hybrid honored. Never steals focus. The first worker always opens
+  # a visible split off firstmate.
   cmux_out=$(fm_terminal_cmux_place_worker "$caller_ws" "$caller_surface" "$layout" "$ID") || {
     echo "error: cmux worker placement failed for $WT: $cmux_out" >&2
     [ "$KIND" = secondmate ] || ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
@@ -552,12 +553,11 @@ spawn_cmux_and_exit() {
     exit 1
   fi
   # The worker's workspace is firstmate's own for a grid/split/tab placement, but a
-  # NEW workspace when auto overflowed to a new window - the placement echoes it in
-  # that case. Capture it (falling back to the caller workspace) and use it for the
-  # pane lookup, meta, rename, and launch send so a new-window worker is addressed
-  # in its own window rather than firstmate's.
+  # NEW owned workspace when auto overflowed. Capture it (falling back to the
+  # caller workspace) and use it for the pane lookup, meta, rename, and launch send.
   worker_ws=$(printf '%s\n' "$cmux_out" | grep -o 'workspace:[0-9][0-9]*' | tail -1 || true)
   [ -n "$worker_ws" ] || worker_ws=$caller_ws
+  owned_workspace=$(printf '%s\n' "$cmux_out" | grep '^owned_workspace=1$' || true)
   pane=$(for p in $(cmux list-panes --workspace "$worker_ws" 2>/dev/null | grep -o 'pane:[0-9][0-9]*'); do cmux list-pane-surfaces --workspace "$worker_ws" --pane "$p" 2>/dev/null | grep -q "${surface}" && { echo "$p"; break; }; done)
 
   TASK_TMP="/tmp/fm-$ID"
@@ -612,6 +612,7 @@ EOF
   {
     echo "terminal_backend=cmux"
     echo "workspace=$worker_ws"
+    [ -n "$owned_workspace" ] && echo "owned_workspace=1"
     [ -n "$pane" ] && echo "pane=$pane"
     echo "surface=$surface"
     echo "harness=$HARNESS"
