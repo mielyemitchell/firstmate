@@ -145,8 +145,10 @@ Concrete tiling for `auto` (capacity `FM_CMUX_GRID_CAPACITY`, default 4; rows
 - Worker 2: `cmux new-split down` off worker 1's surface → bottom of column 1.
 - Worker 3: `cmux new-split right` off worker 1's surface → top of column 2.
 - Worker 4: `cmux new-split down` off worker 3's surface → bottom of column 2.
-- Worker 5 (grid full): `cmux new-window`, a `cmux new-workspace` in it, and a
-  `cmux new-pane` terminal surface — then the grid fills again in that window.
+- Worker 5 (grid full): `cmux new-window` — which prints a bare `OK <uuid>`, not a
+  `window:N` short ref, and auto-creates a default workspace + terminal surface in
+  the new window, taking focus there — resolved via `cmux identify` (no separate
+  `new-workspace`/`new-pane` call) — then the grid fills again in that window.
 
 Later workers anchor (split) off a **prior worker's** surface with an alternating
 direction, so firstmate is only ever the anchor for worker 1. Anchors are

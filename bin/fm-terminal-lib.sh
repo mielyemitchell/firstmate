@@ -49,7 +49,10 @@ fm_terminal_config_backend() {  # -> tmux|cmux
 #   worker 2 -> new-split down off worker 1  (bottom of column 1)
 #   worker 3 -> new-split right off worker 1 (top of column 2)
 #   worker 4 -> new-split down off worker 3  (bottom of column 2)
-#   worker 5 -> new cmux window (grid at capacity), then the grid fills again.
+#   worker 5 -> new cmux window (grid at capacity); `cmux new-window` auto-creates
+#              a default workspace + terminal surface in that window (resolved via
+#              `cmux identify`, not a separate new-workspace/new-pane call), then
+#              the grid fills again there.
 # Anchors are resolved from the recorded worker surfaces/workspaces in
 # state/*.meta, ordered by cmux's monotonically-increasing surface ref (a later
 # worker gets a higher surface number), so the ordering is stable across meta
@@ -221,23 +224,29 @@ fm_terminal_cmux_place_grid() {  # <workspace> <caller_surface> <exclude-id> <N>
   cmux new-split "$dir" --workspace "$anchor_ws" --surface "$anchor_surface" --focus false 2>&1
 }
 
-# Overflow to a NEW cmux window: create the window, a workspace in it, and a
-# terminal surface in that workspace. cmux new-window is bare (no --focus flag),
-# so it may take focus - every command that CAN take --focus false does. Echoes a
-# single normalized "<surface:N> <workspace:N>" line so the caller captures BOTH
-# the new surface and the new window's workspace (which differs from firstmate's).
+# Overflow to a NEW cmux window. `cmux new-window` prints a bare "OK <uuid>" (NOT
+# a "window:N" short ref like every other placement command here), so capture the
+# raw handle rather than grepping for a short ref that will never appear. It also
+# auto-creates a default workspace + terminal surface in the new window and takes
+# focus there - the one placement command with no --focus flag - so the correct
+# follow-up is `cmux identify`, which resolves that now-focused window's
+# auto-created workspace/surface directly. Do not call `cmux new-workspace`/
+# `cmux new-pane` here: that would create a SECOND, unwanted workspace/surface on
+# top of the one new-window already made, and an accidentally empty --window arg
+# on new-workspace silently retargets the current/live window instead of the new
+# one. Echoes a single normalized "<surface:N> <workspace:N>" line so the caller
+# captures BOTH the new surface and the new window's workspace (which differs
+# from firstmate's).
 fm_terminal_cmux_place_new_window() {
-  local win_out win ws_out ws pane_out surface
+  local win_out win ident_out ws surface
   win_out=$(cmux new-window 2>&1) || { printf '%s\n' "$win_out" >&2; return 1; }
-  win=$(printf '%s\n' "$win_out" | grep -o 'window:[0-9][0-9]*' | tail -1 || true)
-  [ -n "$win" ] || win=$(cmux current-window 2>/dev/null | grep -o 'window:[0-9][0-9]*' | tail -1 || true)
-  [ -n "$win" ] || { echo "error: cmux new-window did not report a window ref" >&2; return 1; }
-  ws_out=$(cmux new-workspace --window "$win" --focus false 2>&1) || { printf '%s\n' "$ws_out" >&2; return 1; }
-  ws=$(printf '%s\n' "$ws_out" | grep -o 'workspace:[0-9][0-9]*' | tail -1 || true)
-  [ -n "$ws" ] || { echo "error: cmux new-workspace did not report a workspace ref" >&2; return 1; }
-  pane_out=$(cmux new-pane --type terminal --direction right --workspace "$ws" --focus false 2>&1) || { printf '%s\n' "$pane_out" >&2; return 1; }
-  surface=$(printf '%s\n' "$pane_out" | grep -o 'surface:[0-9][0-9]*' | tail -1 || true)
-  [ -n "$surface" ] || { echo "error: cmux new-pane did not report a surface ref in the new window: $pane_out" >&2; return 1; }
+  win=$(printf '%s\n' "$win_out" | tail -1 | awk '{print $NF}')
+  [ -n "$win" ] || { echo "error: cmux new-window did not report a window ref: $win_out" >&2; return 1; }
+  ident_out=$(cmux identify --json 2>&1) || { printf '%s\n' "$ident_out" >&2; return 1; }
+  ws=$(printf '%s\n' "$ident_out" | grep -o 'workspace:[0-9][0-9]*' | tail -1 || true)
+  [ -n "$ws" ] || { echo "error: cmux identify did not report a workspace ref for new window $win: $ident_out" >&2; return 1; }
+  surface=$(printf '%s\n' "$ident_out" | grep -o 'surface:[0-9][0-9]*' | tail -1 || true)
+  [ -n "$surface" ] || { echo "error: cmux identify did not report a surface ref for new window $win: $ident_out" >&2; return 1; }
   printf '%s %s\n' "$surface" "$ws"
 }
 

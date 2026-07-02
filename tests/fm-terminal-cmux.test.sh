@@ -21,9 +21,13 @@ case "$1" in
   read-screen) printf 'done: fake cmux output\n'; exit 0 ;;
   send|send-key|close-surface) printf 'OK surface:2 workspace:1\n'; exit 0 ;;
   new-split|new-pane|new-surface) printf 'created surface:7 workspace:1\n'; exit 0 ;;
-  new-window) printf 'created window:2\n'; exit 0 ;;
+  # Real cmux new-window prints a bare "OK <uuid>", never a window:N short ref.
+  new-window) printf 'OK E566A1D2-0000-0000-0000-000000000002\n'; exit 0 ;;
   current-window) printf 'window:2\n'; exit 0 ;;
   new-workspace) printf 'created workspace:9\n'; exit 0 ;;
+  # new-window auto-creates a default workspace + terminal surface and focuses the
+  # new window, so identify (called with no --window override) resolves them.
+  identify) printf '{"window":"window:2","workspace":"workspace:9","surface":"surface:7"}\n'; exit 0 ;;
   *) exit 0 ;;
 esac
 SH
@@ -175,18 +179,33 @@ test_auto_grid_then_new_window() {
 }
 
 test_auto_overflow_new_window_shape() {
-  # At capacity the overflow builds a worker surface in a fresh window: new-window,
-  # then a workspace in it, then a terminal pane. It echoes both the new surface and
-  # the new window's workspace so the spawner addresses the worker in its own window.
+  # At capacity the overflow creates a new window - cmux new-window auto-creates a
+  # default workspace + terminal surface in it and takes focus there, so placement
+  # reads those back via `cmux identify` instead of issuing its own new-workspace/
+  # new-pane calls (which would create a second, unwanted surface). It echoes both
+  # the new surface and the new window's workspace so the spawner addresses the
+  # worker in its own window.
   seed_grid_workers 4; : > "$LOG"
   local out
   out=$(place workspace:1 surface:5 auto newtask) || fail "new-window overflow placement failed"
   assert_grep 'new-window' "$LOG" "overflow did not create a new window"
-  assert_grep 'new-workspace --window window:2 --focus false' "$LOG" "overflow did not create a workspace in the new window"
-  assert_grep 'new-pane --type terminal --direction right --workspace workspace:9 --focus false' "$LOG" "overflow did not create a terminal pane in the new workspace"
+  assert_grep 'identify' "$LOG" "overflow did not resolve the auto-created workspace/surface via cmux identify"
+  assert_no_grep 'new-workspace' "$LOG" "overflow wrongly created a second workspace (new-window already auto-creates one)"
+  assert_no_grep 'new-pane\|new-surface' "$LOG" "overflow wrongly created a second surface (new-window already auto-creates one)"
   assert_contains "$out" 'surface:7' "new-window placement did not echo the worker surface"
   assert_contains "$out" 'workspace:9' "new-window placement did not echo the new window's workspace"
-  pass "auto overflow: new window -> workspace -> terminal pane, echoing the new surface + workspace"
+  pass "auto overflow: new window -> identify (auto-created workspace/surface), echoing the new surface + workspace"
+}
+
+test_new_window_parses_bare_uuid_not_short_ref() {
+  # cmux new-window prints a bare "OK <uuid>", never a "window:N" short ref (unlike
+  # every other placement command). Placement must still succeed off that uuid
+  # rather than grepping for a window:N pattern that will never match.
+  seed_grid_workers 4; : > "$LOG"
+  out=$(place workspace:1 surface:5 auto newtask) || fail "placement failed to parse a bare-uuid new-window response"
+  assert_contains "$out" 'surface:7' "bare-uuid new-window did not still resolve a worker surface"
+  assert_contains "$out" 'workspace:9' "bare-uuid new-window did not still resolve the new window's workspace"
+  pass "new-window overflow parses a bare UUID window ref, not a window:N short ref"
 }
 
 test_grid_anchor_uses_recorded_workspace() {
@@ -233,11 +252,14 @@ test_focus_never_stolen() {
   # a later grid split (worker 4) also passes --focus false
   seed_grid_workers 3; : > "$LOG"; place workspace:1 surface:5 auto newtask >/dev/null
   assert_grep '--focus false' "$LOG" "later grid split did not pass --focus false"
-  # new-window overflow: every command that CAN take --focus false does (cmux
-  # new-window itself is bare and has no --focus flag).
+  # new-window overflow: cmux new-window is bare and has no --focus flag (the one
+  # placement command that can take focus). Its auto-created workspace/surface are
+  # then read back with `cmux identify`, a read-only call with no focus
+  # implications and no further pane/workspace creation that could steal focus.
   seed_grid_workers 4; : > "$LOG"; place workspace:1 surface:5 auto newtask >/dev/null
-  assert_grep 'new-workspace --window window:2 --focus false' "$LOG" "new-window workspace did not pass --focus false"
-  assert_grep 'new-pane --type terminal --direction right --workspace workspace:9 --focus false' "$LOG" "new-window pane did not pass --focus false"
+  assert_grep 'new-window' "$LOG" "new-window overflow did not create a new window"
+  assert_grep 'identify' "$LOG" "new-window overflow did not resolve via cmux identify"
+  assert_no_grep 'new-split\|new-pane\|new-surface\|new-workspace' "$LOG" "new-window overflow issued an unnecessary focus-affecting command"
   # tab overflow (explicit tabs layout) passes --focus false
   seed_cmux_workers 1; : > "$LOG"; place workspace:1 surface:1 tabs newtask >/dev/null
   assert_grep '--focus false' "$LOG" "tab placement did not pass --focus false"
@@ -265,6 +287,7 @@ test_layout_action_grid_and_window
 test_grid_slot_arithmetic
 test_auto_grid_then_new_window
 test_auto_overflow_new_window_shape
+test_new_window_parses_bare_uuid_not_short_ref
 test_grid_anchor_uses_recorded_workspace
 test_explicit_layout_modes
 test_focus_never_stolen
