@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse worktree, or a secondmate in
 # its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--scout]
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--title <text>] [--scout]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] --secondmate
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
@@ -9,6 +9,14 @@
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
 #   from that harness's launch rather than guessed.
+#   --title <text> is an optional plain-English display title ("<project> · <doing>"),
+#   cmux backend only: it renames the worker's cmux tab instead of the default
+#   machine-id title and is recorded as title= in meta. Purely cosmetic - nothing
+#   matches on it, the machine id (workspace=/surface=/window=) stays the
+#   functional identifier everywhere. Truncated to 48 chars with an ellipsis.
+#   Single-task spawns only; the id=repo batch form refuses it (titles are per-task).
+#   On the tmux backend the flag is accepted and recorded in meta but otherwise
+#   unused - the tmux window name stays the functional fm-<id>.
 #   With no harness arg, a crewmate/scout spawn resolves the CREW harness only when
 #   config/crew-dispatch.json is absent. When that file exists, crewmate/scout
 #   spawns require an explicit harness so firstmate cannot silently skip dispatch
@@ -73,9 +81,11 @@ KIND=ship
 HARNESS_ARG=
 MODEL=
 EFFORT=
+TITLE=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
+TITLE_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -87,6 +97,7 @@ for a in "$@"; do
       harness) HARNESS_ARG=$a; HARNESS_SET=1 ;;
       model) MODEL=$a; MODEL_SET=1 ;;
       effort) EFFORT=$a; EFFORT_SET=1 ;;
+      title) TITLE=$a; TITLE_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -101,6 +112,8 @@ for a in "$@"; do
     --model=*) MODEL=${a#--model=}; MODEL_SET=1 ;;
     --effort) want_value=effort ;;
     --effort=*) EFFORT=${a#--effort=}; EFFORT_SET=1 ;;
+    --title) want_value=title ;;
+    --title=*) TITLE=${a#--title=}; TITLE_SET=1 ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -108,6 +121,12 @@ done
 [ "$HARNESS_SET" -eq 0 ] || [ -n "$HARNESS_ARG" ] || { echo "error: --harness requires a non-empty value" >&2; exit 1; }
 [ "$MODEL_SET" -eq 0 ] || [ -n "$MODEL" ] || { echo "error: --model requires a non-empty value" >&2; exit 1; }
 [ "$EFFORT_SET" -eq 0 ] || [ -n "$EFFORT" ] || { echo "error: --effort requires a non-empty value" >&2; exit 1; }
+[ "$TITLE_SET" -eq 0 ] || [ -n "$TITLE" ] || { echo "error: --title requires a non-empty value" >&2; exit 1; }
+# Cap the human title so sidebar/tab display never overflows; truncate with a
+# single ellipsis char rather than three dots to keep the cap tight.
+if [ "$TITLE_SET" -eq 1 ] && [ "${#TITLE}" -gt 48 ]; then
+  TITLE="${TITLE:0:47}…"
+fi
 case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
@@ -124,6 +143,10 @@ idpart=${idpart%%=*}
 if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in */*) false ;; *) true ;; esac; then
   if [ "$KIND" != secondmate ] && [ -z "$HARNESS_ARG" ] && [ -f "$CONFIG/crew-dispatch.json" ]; then
     echo "error: config/crew-dispatch.json is active - pass an explicit harness resolved from the dispatch rules (the consultation backstop, so the rules are never silently skipped)." >&2
+    exit 1
+  fi
+  if [ "$TITLE_SET" -eq 1 ]; then
+    echo "error: --title applies to a single-task spawn only; batch id=repo dispatch does not support a shared title" >&2
     exit 1
   fi
   rc=0
@@ -576,7 +599,16 @@ spawn_cmux_and_exit() {
     fi
   fi
 
-  task_title="fm-$ID"
+  # Display-only: the cmux tab title is cosmetic (verified - nothing matches on
+  # it; supervision/teardown/recovery address workers by workspace=/surface=
+  # refs recorded in meta, section 8/AGENTS.md). --title lets firstmate show a
+  # plain-English "<project> · <doing>" title instead of the machine id; the
+  # machine id remains the functional identifier in meta/state either way.
+  if [ "$TITLE_SET" -eq 1 ]; then
+    task_title="$TITLE"
+  else
+    task_title="fm-$ID"
+  fi
   # Place the worker per the layout policy: under auto, tile a 2-row grid to the
   # right of firstmate (2x2 for the default capacity) and overflow to a NEW named
   # cmux workspace in firstmate's current window once the grid is full; explicit
@@ -692,6 +724,7 @@ EOF
     echo "tasktmp=$TASK_TMP"
     echo "model=${MODEL:-default}"
     echo "effort=${EFFORT:-default}"
+    [ "$TITLE_SET" -eq 0 ] || echo "title=$TITLE"
     if [ "$KIND" = secondmate ]; then
       # A cmux secondmate runs in its persistent home, not a leased worktree, so it
       # records home=/projects= and NO worktree=/window= (a cmux secondmate has
@@ -917,6 +950,7 @@ fi
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  [ "$TITLE_SET" -eq 0 ] || echo "title=$TITLE"
   if [ "$KIND" = secondmate ]; then
     echo "home=$PROJ_ABS"
     echo "projects=$SECONDMATE_PROJECTS"

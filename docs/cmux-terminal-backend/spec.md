@@ -141,6 +141,10 @@ For cmux worker spawn:
    tasktmp=/tmp/fm-<id>
    ```
 
+### Worker tab titles
+
+`fm-spawn.sh` accepts an optional `--title '<text>'` flag on cmux spawns. When present, it renames the worker's cmux tab to that text (`cmux rename-tab`) and records `title=<text>` in meta; firstmate passes a plain-English `<project> · <doing>` title on every cmux dispatch so the captain reads the sidebar/tabs without decoding machine ids. This is display-only: the tab title is cosmetic, and every functional reference to a worker (supervision, teardown, recovery) uses the `workspace=`/`surface=` refs in meta, never the tab text. Without `--title`, the tab keeps its prior default (`fm-<id>`). The tmux backend accepts and records the same flag for consistency but does not use it — the tmux window name stays the functional `fm-<id>`.
+
 ### Layout policy
 
 Mielye default (`auto`): workers never share firstmate's caller workspace. Each
@@ -156,7 +160,7 @@ Concrete tiling for `auto` (capacity `FM_CMUX_GRID_CAPACITY`, default 4; rows
 
 - Worker 1: resolve firstmate's current window explicitly with
   `cmux current-window`, then `cmux new-workspace --name "fm crew 1" --window <id>
-  --focus false`. The new workspace's first terminal surface becomes worker 1.
+--focus false`. The new workspace's first terminal surface becomes worker 1.
 - Worker 2: `cmux new-split down` off worker 1's surface → bottom of column 1.
 - Worker 3: `cmux new-split right` off worker 1's surface → top of column 2.
 - Worker 4: `cmux new-split down` off worker 3's surface → bottom of column 2.

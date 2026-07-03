@@ -370,7 +370,13 @@ case "$1" in
   new-workspace) printf 'created workspace:9 surface:7\n'; exit 0 ;;
   list-panes) printf 'pane:4\n'; exit 0 ;;
   list-pane-surfaces) printf 'surface:7\n'; exit 0 ;;
-  rename-tab|send|refresh-surfaces) exit 0 ;;
+  rename-tab)
+    # Log arg count too, so a test can confirm the title landed as ONE shell
+    # argument (unsplit) rather than several word-split arguments.
+    printf 'RENAME_ARGC=%s\n' "$#" >> "$CMUX_FAKE_LOG"
+    exit 0
+    ;;
+  send|refresh-surfaces) exit 0 ;;
   read-screen)
     if attached; then printf 'codex prompt ready\n'; exit 0; fi
     printf 'Terminal surface not found\n' >&2
@@ -408,6 +414,20 @@ run_cmux_spawn_case() {  # <fake-root> <id> <healthy|ghost|never>
 
 cmux_log_count() {  # <pattern> <file>
   awk -v pat="$1" 'index($0, pat) { n++ } END { print n + 0 }' "$2"
+}
+
+run_cmux_spawn_case_extra() {  # <fake-root> <id> <healthy|ghost|never> [extra fm-spawn.sh args...]
+  local fake=$1 id=$2 mode=$3
+  shift 3
+  mkdir -p "$fake/home/data/$id"
+  printf 'Read this test brief.\n' > "$fake/home/data/$id/brief.md"
+  : > "$fake/cmux.log"
+  rm -f "$fake/cmux-state.attached"
+  PATH="$fake/fakebin:$PATH" \
+    FM_HOME="$fake/home" FM_STATE_OVERRIDE="$fake/home/state" FM_DATA_OVERRIDE="$fake/home/data" FM_CONFIG_OVERRIDE="$fake/home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_WT="$fake/wt" CMUX_FAKE_LOG="$fake/cmux.log" CMUX_FAKE_STATE="$fake/cmux-state" CMUX_GHOST_MODE="$mode" \
+    FM_CMUX_ATTACH_PROBES=1 FM_CMUX_ATTACH_DELAY=0 FM_CMUX_GHOST_REPAIRS=2 \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$fake/project" codex "$@" >"$fake/out" 2>"$fake/err"
 }
 
 test_spawn_healthy_surface_skips_repair() {
@@ -449,6 +469,71 @@ test_spawn_fails_loudly_when_ghost_never_attaches() {
   sends=$(cmux_log_count 'send --workspace workspace:9 --surface surface:7' "$fake/cmux.log")
   [ "$sends" = 3 ] || fail "unrepaired ghost should send initial launch plus 2 repair resends, sent $sends times"
   pass "spawn fails loudly with no meta when cmux ghost repair is exhausted"
+}
+
+# --- cmux spawn plain-English tab titles ------------------------------------
+
+test_spawn_title_renames_cmux_tab() {
+  local fake
+  fake=$(make_cmux_spawn_root spawn-title)
+  run_cmux_spawn_case_extra "$fake" titled-ok healthy --title 'twinfield · fixing date test' \
+    || fail "titled cmux spawn failed: $(cat "$fake/err")"
+  assert_grep "rename-tab --workspace workspace:9 --surface surface:7 twinfield · fixing date test" "$fake/cmux.log" \
+    "titled spawn did not rename the cmux tab to the exact title"
+  assert_grep 'RENAME_ARGC=6' "$fake/cmux.log" "titled spawn did not pass the title as a single shell argument"
+  assert_grep 'title=twinfield · fixing date test' "$fake/home/state/titled-ok.meta" "titled spawn did not record title= in meta"
+  pass "spawn renames the cmux tab and records title= when --title is given"
+}
+
+test_spawn_without_title_uses_default_tab() {
+  local fake
+  fake=$(make_cmux_spawn_root spawn-notitle)
+  run_cmux_spawn_case_extra "$fake" no-title healthy \
+    || fail "untitled cmux spawn failed: $(cat "$fake/err")"
+  assert_grep 'rename-tab --workspace workspace:9 --surface surface:7 fm-no-title' "$fake/cmux.log" \
+    "untitled spawn did not fall back to the machine-id tab title"
+  assert_no_grep 'title=' "$fake/home/state/no-title.meta" "untitled spawn should not record title= in meta"
+  pass "spawn without --title keeps the machine-id tab title and records no title="
+}
+
+test_spawn_title_truncates_overlong() {
+  local fake long_title truncated
+  fake=$(make_cmux_spawn_root spawn-longtitle)
+  long_title="nemesis-item-tracker · reconciling the par level algorithm against yesterday's stockout data across every location"
+  run_cmux_spawn_case_extra "$fake" long-title healthy --title "$long_title" \
+    || fail "overlong-title cmux spawn failed: $(cat "$fake/err")"
+  truncated="${long_title:0:47}…"
+  assert_grep "rename-tab --workspace workspace:9 --surface surface:7 $truncated" "$fake/cmux.log" \
+    "overlong title was not truncated to 47 chars plus ellipsis"
+  assert_grep "title=$truncated" "$fake/home/state/long-title.meta" "overlong title in meta was not truncated"
+  pass "spawn truncates an overlong --title with an ellipsis and never breaks rename-tab"
+}
+
+test_spawn_title_with_apostrophe_and_spaces() {
+  local fake
+  fake=$(make_cmux_spawn_root spawn-apostrophe)
+  run_cmux_spawn_case_extra "$fake" quote-title healthy --title "mysubo's dashboard · fixing captain's chart" \
+    || fail "apostrophe-title cmux spawn failed: $(cat "$fake/err")"
+  assert_grep "rename-tab --workspace workspace:9 --surface surface:7 mysubo's dashboard · fixing captain's chart" "$fake/cmux.log" \
+    "title with apostrophes and spaces did not pass through safely"
+  assert_grep 'RENAME_ARGC=6' "$fake/cmux.log" "apostrophe title was not passed as a single shell argument"
+  pass "spawn passes a --title containing apostrophes and spaces through safely"
+}
+
+test_batch_spawn_title_refused() {
+  local fake out err status
+  fake=$(make_cmux_spawn_root spawn-batch-title)
+  mkdir -p "$fake/home/data/batch-a"
+  printf 'Read this test brief.\n' > "$fake/home/data/batch-a/brief.md"
+  out="$fake/batch.out"; err="$fake/batch.err"
+  PATH="$fake/fakebin:$PATH" \
+    FM_HOME="$fake/home" FM_STATE_OVERRIDE="$fake/home/state" FM_DATA_OVERRIDE="$fake/home/data" FM_CONFIG_OVERRIDE="$fake/home/config" \
+    FM_FAKE_WT="$fake/wt" CMUX_FAKE_LOG="$fake/cmux.log" CMUX_FAKE_STATE="$fake/cmux-state" \
+    "$ROOT/bin/fm-spawn.sh" "batch-a=$fake/project" codex --title 'shared title' >"$out" 2>"$err"; status=$?
+  expect_code 1 "$status" "batch spawn with --title should be refused"
+  assert_grep 'title applies to a single-task spawn only' "$err" "batch --title refusal did not explain per-task scoping"
+  assert_absent "$fake/home/state/batch-a.meta" "refused batch --title spawn must not leave meta"
+  pass "batch id=repo dispatch refuses a shared --title with a clear error"
 }
 
 # --- cmux teardown workspace cleanup ---------------------------------------
@@ -579,6 +664,11 @@ test_spawn_source_records_owned_workspace_marker
 test_spawn_healthy_surface_skips_repair
 test_spawn_repairs_ghost_surface_and_resends_launch
 test_spawn_fails_loudly_when_ghost_never_attaches
+test_spawn_title_renames_cmux_tab
+test_spawn_without_title_uses_default_tab
+test_spawn_title_truncates_overlong
+test_spawn_title_with_apostrophe_and_spaces
+test_batch_spawn_title_refused
 test_teardown_closes_owned_unshared_workspace
 test_teardown_does_not_close_unmarked_workspace
 test_teardown_does_not_close_shared_owned_workspace
