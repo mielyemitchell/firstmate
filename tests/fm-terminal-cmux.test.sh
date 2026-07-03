@@ -337,6 +337,120 @@ test_spawn_source_records_owned_workspace_marker() {
   pass "spawn records the owned workspace marker emitted by overflow placement"
 }
 
+# --- cmux spawn ghost-surface repair ---------------------------------------
+
+make_cmux_spawn_root() {  # <case>
+  local name=$1 fake
+  fake="$TMP_ROOT/$name"
+  mkdir -p "$fake/home/state" "$fake/home/data" "$fake/home/config" "$fake/fakebin"
+  printf 'cmux\n' > "$fake/home/config/terminal-backend"
+  printf '%s\n' '- project [local-only] - test project (added 2026-07-02)' > "$fake/home/data/projects.md"
+  fm_git_worktree "$fake/project" "$fake/wt" worker-branch
+  cat > "$fake/fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "treehouse $*" >> "$CMUX_FAKE_LOG"
+case "$1" in
+  get) printf '%s\n' "$FM_FAKE_WT" ;;
+  return) printf 'returned %s\n' "${3:-}" ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$fake/fakebin/treehouse"
+  cat > "$fake/fakebin/cmux" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$CMUX_FAKE_LOG"
+attached() {
+  [ "${CMUX_GHOST_MODE:-healthy}" = healthy ] || [ -f "$CMUX_FAKE_STATE.attached" ]
+}
+case "$1" in
+  ping) exit 0 ;;
+  identify) printf '{"caller":{"workspace_ref":"workspace:1","surface_ref":"surface:5"}}\n'; exit 0 ;;
+  current-window) printf 'window:2\n'; exit 0 ;;
+  current-workspace) printf 'workspace:1\n'; exit 0 ;;
+  new-workspace) printf 'created workspace:9 surface:7\n'; exit 0 ;;
+  list-panes) printf 'pane:4\n'; exit 0 ;;
+  list-pane-surfaces) printf 'surface:7\n'; exit 0 ;;
+  rename-tab|send|refresh-surfaces) exit 0 ;;
+  read-screen)
+    if attached; then printf 'codex prompt ready\n'; exit 0; fi
+    printf 'Terminal surface not found\n' >&2
+    exit 1
+    ;;
+  surface-health)
+    if attached; then printf 'surface:7 in_window=true\n'; else printf 'surface:7 in_window=false\n'; fi
+    exit 0
+    ;;
+  select-workspace)
+    if [ "${3:-}" = workspace:9 ] && [ "${CMUX_GHOST_MODE:-}" != never ]; then
+      : > "$CMUX_FAKE_STATE.attached"
+    fi
+    exit 0
+    ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$fake/fakebin/cmux"
+  printf '%s\n' "$fake"
+}
+
+run_cmux_spawn_case() {  # <fake-root> <id> <healthy|ghost|never>
+  local fake=$1 id=$2 mode=$3
+  mkdir -p "$fake/home/data/$id"
+  printf 'Read this test brief.\n' > "$fake/home/data/$id/brief.md"
+  : > "$fake/cmux.log"
+  rm -f "$fake/cmux-state.attached"
+  PATH="$fake/fakebin:$PATH" \
+    FM_HOME="$fake/home" FM_STATE_OVERRIDE="$fake/home/state" FM_DATA_OVERRIDE="$fake/home/data" FM_CONFIG_OVERRIDE="$fake/home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_WT="$fake/wt" CMUX_FAKE_LOG="$fake/cmux.log" CMUX_FAKE_STATE="$fake/cmux-state" CMUX_GHOST_MODE="$mode" \
+    FM_CMUX_ATTACH_PROBES=1 FM_CMUX_ATTACH_DELAY=0 FM_CMUX_GHOST_REPAIRS=2 \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$fake/project" codex >"$fake/out" 2>"$fake/err"
+}
+
+cmux_log_count() {  # <pattern> <file>
+  awk -v pat="$1" 'index($0, pat) { n++ } END { print n + 0 }' "$2"
+}
+
+test_spawn_healthy_surface_skips_repair() {
+  local fake sends
+  fake=$(make_cmux_spawn_root spawn-healthy)
+  run_cmux_spawn_case "$fake" ok-healthy healthy || fail "healthy cmux spawn failed: $(cat "$fake/err")"
+  assert_present "$fake/home/state/ok-healthy.meta" "healthy spawn did not write meta"
+  assert_grep 'read-screen --workspace workspace:9 --surface surface:7 --lines 1' "$fake/cmux.log" "healthy spawn did not probe the surface"
+  assert_no_grep 'select-workspace --workspace workspace:9' "$fake/cmux.log" "healthy spawn ran ghost repair"
+  sends=$(cmux_log_count 'send --workspace workspace:9 --surface surface:7' "$fake/cmux.log")
+  [ "$sends" = 1 ] || fail "healthy spawn should send launch once, sent $sends times"
+  pass "spawn probes healthy cmux surfaces without repair"
+}
+
+test_spawn_repairs_ghost_surface_and_resends_launch() {
+  local fake sends target_line back_line
+  fake=$(make_cmux_spawn_root spawn-ghost)
+  run_cmux_spawn_case "$fake" repair-ghost ghost || fail "ghost-repair cmux spawn failed: $(cat "$fake/err")"
+  assert_present "$fake/home/state/repair-ghost.meta" "repaired ghost spawn did not write meta"
+  assert_grep 'select-workspace --workspace workspace:9' "$fake/cmux.log" "ghost repair did not select the worker workspace"
+  assert_grep 'select-workspace --workspace workspace:1' "$fake/cmux.log" "ghost repair did not restore the original workspace"
+  target_line=$(grep -n -F 'select-workspace --workspace workspace:9' "$fake/cmux.log" | head -1 | cut -d: -f1)
+  back_line=$(grep -n -F 'select-workspace --workspace workspace:1' "$fake/cmux.log" | head -1 | cut -d: -f1)
+  [ "$target_line" -lt "$back_line" ] || fail "ghost repair did not select target before restoring original workspace"
+  sends=$(cmux_log_count 'send --workspace workspace:9 --surface surface:7' "$fake/cmux.log")
+  [ "$sends" = 2 ] || fail "ghost repair should send launch twice, sent $sends times"
+  pass "spawn repairs ghost cmux surfaces with select-toggle and launch resend"
+}
+
+test_spawn_fails_loudly_when_ghost_never_attaches() {
+  local fake status repairs sends
+  fake=$(make_cmux_spawn_root spawn-never)
+  run_cmux_spawn_case "$fake" dead-ghost never; status=$?
+  expect_code 1 "$status" "unrepaired ghost spawn did not fail"
+  assert_absent "$fake/home/state/dead-ghost.meta" "unrepaired ghost spawn must not leave meta"
+  assert_grep 'cmux surface did not attach after launch/repair; workspace=workspace:9 surface=surface:7' "$fake/err" "unrepaired ghost error did not name workspace and surface"
+  repairs=$(cmux_log_count 'select-workspace --workspace workspace:9' "$fake/cmux.log")
+  [ "$repairs" = 2 ] || fail "unrepaired ghost should cap repair attempts at 2, saw $repairs"
+  sends=$(cmux_log_count 'send --workspace workspace:9 --surface surface:7' "$fake/cmux.log")
+  [ "$sends" = 3 ] || fail "unrepaired ghost should send initial launch plus 2 repair resends, sent $sends times"
+  pass "spawn fails loudly with no meta when cmux ghost repair is exhausted"
+}
+
 # --- cmux teardown workspace cleanup ---------------------------------------
 
 make_teardown_root() {  # <case> <id> <marker:yes|no> <shared:yes|no>
@@ -462,6 +576,9 @@ test_explicit_layout_modes
 test_focus_never_stolen
 test_invalid_layout_errors
 test_spawn_source_records_owned_workspace_marker
+test_spawn_healthy_surface_skips_repair
+test_spawn_repairs_ghost_surface_and_resends_launch
+test_spawn_fails_loudly_when_ghost_never_attaches
 test_teardown_closes_owned_unshared_workspace
 test_teardown_does_not_close_unmarked_workspace
 test_teardown_does_not_close_shared_owned_workspace

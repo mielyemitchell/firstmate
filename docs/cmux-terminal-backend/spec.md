@@ -235,6 +235,10 @@ cmux teardown must preserve the current safety invariant:
 - Meta files must contain enough target information for recovery.
 - cmux focus should not be stolen unless the user explicitly asks; use `--focus false` where supported.
 
+## Ghost surface repair
+
+cmux currently has a ghost-surface defect when a terminal surface is created in a non-visible workspace: the surface is listed, but the terminal has not attached, so `read-screen` fails with "Terminal surface not found" and `surface-health` can report `in_window=false`. After every cmux spawn launch, firstmate probes the new surface for a short bounded window. If the surface is a ghost, spawn repairs it by briefly selecting the worker workspace and immediately restoring the previously focused workspace, then resends the launch line. Repair attempts are capped; if the surface still will not attach, spawn exits non-zero with the workspace/surface refs and does not write task meta for the dead worker.
+
 ## Error behavior
 
 - If `config/terminal-backend=cmux` but `cmux ping` fails, spawn exits with a clear error and does not create a task meta file.

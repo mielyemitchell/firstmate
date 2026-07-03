@@ -499,12 +499,53 @@ fi
 # pre-launch home fast-forward and inheritable-config propagation already applied) and
 # never leases a worktree. Only the terminal changes vs the tmux secondmate path; every
 # other secondmate invariant is preserved (Phase B slice 3).
+fm_cmux_surface_attached() {  # <workspace> <surface>
+  local ws=$1 surface=$2 screen_out health_out
+  if screen_out=$(cmux read-screen --workspace "$ws" --surface "$surface" --lines 1 2>&1); then
+    return 0
+  fi
+  health_out=$(cmux surface-health --workspace "$ws" 2>/dev/null || true)
+  case "$screen_out
+$health_out" in
+    *'Terminal surface not found'*|*'in_window=false'*) return 1 ;;
+    *) return 1 ;;
+  esac
+}
+
+fm_cmux_wait_surface_attached() {  # <workspace> <surface>
+  local ws=$1 surface=$2 attempts=${FM_CMUX_ATTACH_PROBES:-6} delay=${FM_CMUX_ATTACH_DELAY:-0.5} i=0
+  case "$attempts" in ''|*[!0-9]*) attempts=6 ;; esac
+  [ "$attempts" -gt 0 ] 2>/dev/null || attempts=1
+  while [ "$i" -lt "$attempts" ]; do
+    fm_cmux_surface_attached "$ws" "$surface" && return 0
+    i=$((i + 1))
+    [ "$i" -lt "$attempts" ] && sleep "$delay"
+  done
+  return 1
+}
+
+fm_cmux_repair_ghost_surface() {  # <workspace> <surface>
+  local ws=$1 surface=$2 original_ws
+  original_ws=$(cmux current-workspace 2>/dev/null | tail -1 | awk '{print $NF}' || true)
+  if ! cmux select-workspace --workspace "$ws" >/dev/null 2>&1; then
+    echo "warning: cmux ghost repair could not select target workspace; workspace=$ws surface=$surface" >&2
+    return 1
+  fi
+  cmux refresh-surfaces >/dev/null 2>&1 || true
+  if [ -n "$original_ws" ] && [ "$original_ws" != "$ws" ]; then
+    if ! cmux select-workspace --workspace "$original_ws" >/dev/null 2>&1; then
+      echo "warning: cmux ghost repair could not restore original workspace; original_workspace=$original_ws target_workspace=$ws surface=$surface" >&2
+      return 1
+    fi
+  fi
+}
+
 spawn_cmux_and_exit() {
   command -v cmux >/dev/null 2>&1 || { echo "error: terminal backend is cmux but cmux is not on PATH" >&2; exit 1; }
   cmux ping >/dev/null 2>&1 || { echo "error: terminal backend is cmux but cmux is not reachable" >&2; exit 1; }
   command -v python3 >/dev/null 2>&1 || { echo "error: cmux backend needs python3 to parse cmux identify output" >&2; exit 1; }
 
-  local identify caller_ws caller_surface lease_out cmux_out surface worker_ws pane task_title layout owned_workspace
+  local identify caller_ws caller_surface lease_out cmux_out surface worker_ws pane task_title layout owned_workspace repair_attempt repair_attempts
   # Resolve the layout policy up front so an invalid config/cmux-layout fails fast,
   # before any treehouse lease or cmux surface is created.
   layout=$(fm_terminal_cmux_layout) || exit 1
@@ -609,6 +650,35 @@ EOF
     LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $LAUNCH"
   fi
 
+  launch_line="cd $(shell_quote "$WT") && export GOTMPDIR=$(shell_quote "$TASK_TMP/gotmp") && $LAUNCH"
+  cmux rename-tab --workspace "$worker_ws" --surface "$surface" "$task_title" >/dev/null 2>&1 || true
+  cmux send --workspace "$worker_ws" --surface "$surface" "$launch_line\n" || {
+    echo "error: cmux launch send failed; workspace=$worker_ws surface=$surface path=$WT" >&2
+    [ "$KIND" = secondmate ] || ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
+    exit 1
+  }
+  if ! fm_cmux_wait_surface_attached "$worker_ws" "$surface"; then
+    repair_attempt=1
+    repair_attempts=${FM_CMUX_GHOST_REPAIRS:-2}
+    case "$repair_attempts" in ''|*[!0-9]*) repair_attempts=2 ;; esac
+    while [ "$repair_attempt" -le "$repair_attempts" ]; do
+      if fm_cmux_repair_ghost_surface "$worker_ws" "$surface"; then
+        cmux send --workspace "$worker_ws" --surface "$surface" "$launch_line\n" || {
+          echo "error: cmux launch resend failed after ghost repair; workspace=$worker_ws surface=$surface path=$WT" >&2
+          [ "$KIND" = secondmate ] || ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
+          exit 1
+        }
+        fm_cmux_wait_surface_attached "$worker_ws" "$surface" && break
+      fi
+      repair_attempt=$((repair_attempt + 1))
+    done
+    if [ "$repair_attempt" -gt "$repair_attempts" ]; then
+      echo "error: cmux surface did not attach after launch/repair; workspace=$worker_ws surface=$surface path=$WT" >&2
+      [ "$KIND" = secondmate ] || ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || true
+      exit 1
+    fi
+  fi
+
   {
     echo "terminal_backend=cmux"
     echo "workspace=$worker_ws"
@@ -634,13 +704,6 @@ EOF
       echo "project=$PROJ_ABS"
     fi
   } > "$STATE/$ID.meta"
-
-  launch_line="cd $(shell_quote "$WT") && export GOTMPDIR=$(shell_quote "$TASK_TMP/gotmp") && $LAUNCH"
-  cmux rename-tab --workspace "$worker_ws" --surface "$surface" "$task_title" >/dev/null 2>&1 || true
-  cmux send --workspace "$worker_ws" --surface "$surface" "$launch_line\n" || {
-    echo "error: cmux launch send failed; workspace=$worker_ws surface=$surface path=$WT" >&2
-    exit 1
-  }
   if [ "$KIND" = secondmate ]; then
     echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO terminal=cmux workspace=$worker_ws surface=$surface home=$PROJ_ABS"
   else
