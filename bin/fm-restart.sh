@@ -37,9 +37,11 @@ done
 
 TIMEOUT=${FM_RESTART_TIMEOUT:-120}
 FORCE_TIMEOUT=${FM_RESTART_FORCE_TIMEOUT:-20}
+CLEANUP_TIMEOUT=${FM_RESTART_CLEANUP_TIMEOUT:-5}
 POLL_INTERVAL=${FM_RESTART_POLL_INTERVAL:-1}
 case "$TIMEOUT" in ''|*[!0-9]*) echo "error: FM_RESTART_TIMEOUT must be whole seconds" >&2; exit 2 ;; esac
 case "$FORCE_TIMEOUT" in ''|*[!0-9]*) echo "error: FM_RESTART_FORCE_TIMEOUT must be whole seconds" >&2; exit 2 ;; esac
+case "$CLEANUP_TIMEOUT" in ''|*[!0-9]*) echo "error: FM_RESTART_CLEANUP_TIMEOUT must be whole seconds" >&2; exit 2 ;; esac
 
 META="$STATE/$ID.meta"
 [ -f "$META" ] || { echo "error: no meta for $ID at $META" >&2; exit 1; }
@@ -85,6 +87,7 @@ harness_running() {
       for (i = 1; i <= NF; i++) {
         token = $i
         sub(/^.*\//, "", token)
+        sub(/\.(cjs|mjs|js)$/, "", token)
         if (token == want) found = 1
       }
     }
@@ -98,6 +101,17 @@ wait_for_exit() {  # <timeout-seconds>
   while :; do
     ! target_exists && return 0
     ! harness_running && return 0
+    now=$(date +%s)
+    [ "$now" -lt "$deadline" ] || return 1
+    sleep "$POLL_INTERVAL"
+  done
+}
+
+wait_for_target_gone() {  # <timeout-seconds>
+  local timeout=$1 deadline now
+  deadline=$(($(date +%s) + timeout))
+  while :; do
+    ! target_exists && return 0
     now=$(date +%s)
     [ "$now" -lt "$deadline" ] || return 1
     sleep "$POLL_INTERVAL"
@@ -172,6 +186,10 @@ cleanup_and_respawn() {
           exit "$rc"
         fi
         fm_backend_kill "$BACKEND" "$T" >/dev/null 2>&1 || true
+        if ! wait_for_target_gone "$CLEANUP_TIMEOUT"; then
+          echo "error: old herdr endpoint $T for $ID still exists after cleanup; close it manually before treating the lane as refreshed" >&2
+          exit 1
+        fi
       else
         respawn
       fi
