@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Refresh a persistent secondmate lane by asking it to stow and exit, waiting for
-# the harness process to leave, then respawning it through fm-spawn bookkeeping.
+# Refresh a persistent secondmate lane by asking it to stow, sending the harness
+# exit command directly to the raw endpoint, waiting for the harness process to
+# leave, then respawning it through fm-spawn bookkeeping.
 # Usage: fm-restart.sh [--force] <secondmate-id>
 set -eu
 
@@ -38,10 +39,12 @@ done
 TIMEOUT=${FM_RESTART_TIMEOUT:-120}
 FORCE_TIMEOUT=${FM_RESTART_FORCE_TIMEOUT:-20}
 CLEANUP_TIMEOUT=${FM_RESTART_CLEANUP_TIMEOUT:-5}
+STOW_SETTLE=${FM_RESTART_STOW_SETTLE:-2}
 POLL_INTERVAL=${FM_RESTART_POLL_INTERVAL:-1}
 case "$TIMEOUT" in ''|*[!0-9]*) echo "error: FM_RESTART_TIMEOUT must be whole seconds" >&2; exit 2 ;; esac
 case "$FORCE_TIMEOUT" in ''|*[!0-9]*) echo "error: FM_RESTART_FORCE_TIMEOUT must be whole seconds" >&2; exit 2 ;; esac
 case "$CLEANUP_TIMEOUT" in ''|*[!0-9]*) echo "error: FM_RESTART_CLEANUP_TIMEOUT must be whole seconds" >&2; exit 2 ;; esac
+case "$STOW_SETTLE" in ''|*[!0-9]*) echo "error: FM_RESTART_STOW_SETTLE must be whole seconds" >&2; exit 2 ;; esac
 
 META="$STATE/$ID.meta"
 [ -f "$META" ] || { echo "error: no meta for $ID at $META" >&2; exit 1; }
@@ -131,35 +134,50 @@ force_exit_sequence() {
     claude)
       send_key_best_effort Escape
       sleep 1
-      send_text_best_effort /exit
+      graceful_exit_sequence
       ;;
     codex)
       send_key_best_effort Escape
       sleep 1
-      send_text_best_effort /quit
+      graceful_exit_sequence
       ;;
     opencode)
       send_key_best_effort Escape
       sleep 0.5
       send_key_best_effort Escape
       sleep 1
-      send_text_best_effort /exit
+      graceful_exit_sequence
       ;;
     pi)
       send_key_best_effort Escape
       sleep 1
-      send_text_best_effort /quit
+      graceful_exit_sequence
       ;;
     grok)
       send_key_best_effort C-c
       sleep 1
-      send_key_best_effort C-q
-      sleep 0.2
-      send_key_best_effort C-q
+      graceful_exit_sequence
       ;;
     *)
       send_key_best_effort C-c
       ;;
+  esac
+}
+
+graceful_exit_sequence() {
+  # Use the explicit backend target ($T), not fm-<id>. A bare secondmate target
+  # gets the from-firstmate marker prepended by fm-send, which turns slash
+  # commands into plain chat. The agent also cannot execute harness slash
+  # commands on firstmate's behalf, so firstmate must send the command itself.
+  case "$HARNESS_CMD" in
+    claude|opencode) send_text_best_effort /exit ;;
+    codex|pi) send_text_best_effort /quit ;;
+    grok)
+      send_key_best_effort C-q
+      sleep 0.2
+      send_key_best_effort C-q
+      ;;
+    *) send_key_best_effort C-c ;;
   esac
 }
 
@@ -204,8 +222,10 @@ cleanup_and_respawn() {
 }
 
 if target_exists && harness_running; then
-  echo "restart: asking $ID to stow and exit (timeout ${TIMEOUT}s)"
-  "$SCRIPT_DIR/fm-send.sh" "fm-$ID" "Stow any lane-local durable context if needed, then exit this agent process now. Do not start new work; firstmate will respawn this lane." >/dev/null
+  echo "restart: asking $ID to stow, then sending raw harness exit (timeout ${TIMEOUT}s)"
+  "$SCRIPT_DIR/fm-send.sh" "fm-$ID" "Stow any lane-local durable context now. Do not start new work; firstmate will refresh this lane." >/dev/null
+  [ "$STOW_SETTLE" = 0 ] || sleep "$STOW_SETTLE"
+  graceful_exit_sequence
   if ! wait_for_exit "$TIMEOUT"; then
     if [ "$FORCE" -ne 1 ]; then
       echo "error: $ID did not exit within ${TIMEOUT}s; rerun with --force to interrupt and restart it" >&2

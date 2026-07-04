@@ -24,7 +24,8 @@ SH
 set -u
 printf 'send:%s:%s\n' "${1:-}" "${2:-}" >> "$FM_RESTART_LOG"
 case "${1:-}:${2:-}" in
-  fm-lane:Stow*)
+  fm-lane:Stow*) ;;
+  *:/quit|*:/exit)
     printf 'zsh\n' > "$FM_FAKE_COMMAND_FILE"
     printf 'zsh\n' > "$FM_FAKE_PROCESS_ARGV_FILE"
     ;;
@@ -159,6 +160,7 @@ run_restart() {  # <case-dir> <root> <fakebin> [args...]
     FM_RESTART_TIMEOUT="${FM_RESTART_TIMEOUT:-1}" \
     FM_RESTART_FORCE_TIMEOUT="${FM_RESTART_FORCE_TIMEOUT:-1}" \
     FM_RESTART_CLEANUP_TIMEOUT="${FM_RESTART_CLEANUP_TIMEOUT:-1}" \
+    FM_RESTART_STOW_SETTLE="${FM_RESTART_STOW_SETTLE:-0}" \
     FM_RESTART_POLL_INTERVAL=1 \
     "$root/bin/fm-restart.sh" "$@"
 }
@@ -202,12 +204,14 @@ test_tmux_live_lane_stows_exits_kills_then_respawns() {
   write_lane_meta "$dir" secondmate tmux firstmate:fm-lane
   run_restart "$dir" "$root" "$fb" lane >/dev/null || fail "tmux live restart failed"
   log=$(cat "$dir/log")
-  assert_contains "$log" "send:fm-lane:Stow" "live lane was not asked to stow and exit via fm-send"
+  assert_contains "$log" "send:fm-lane:Stow" "live lane was not asked to stow via marked fm-send"
+  assert_not_contains "$log" "exit this agent" "marked stow nudge must not ask the agent to exit itself"
+  assert_contains "$log" "send:firstmate:fm-lane:/quit" "live lane exit command was not sent unmarked to the raw target"
   assert_contains "$log" "tmux:kill-window -t firstmate:fm-lane" "tmux old window was not killed before respawn"
   assert_contains "$log" "spawn:lane --backend tmux --secondmate" "tmux lane did not respawn through fm-spawn"
   case "$log" in
-    *"send:fm-lane:Stow"*$'\n'*"tmux:kill-window -t firstmate:fm-lane"*$'\n'*"spawn:lane --backend tmux --secondmate"*) ;;
-    *) fail "tmux restart order was not stow -> kill -> spawn"$'\n'"$log" ;;
+    *"send:fm-lane:Stow"*$'\n'*"send:firstmate:fm-lane:/quit"*$'\n'*"tmux:kill-window -t firstmate:fm-lane"*$'\n'*"spawn:lane --backend tmux --secondmate"*) ;;
+    *) fail "tmux restart order was not marked stow -> raw exit -> kill -> spawn"$'\n'"$log" ;;
   esac
   pass "fm-restart: live tmux lane stows/exits, kills old window, respawns"
 }
@@ -221,6 +225,7 @@ test_tmux_node_wrapped_codex_stows_before_respawn() {
   run_restart "$dir" "$root" "$fb" lane >/dev/null || fail "tmux node-wrapped codex restart failed"
   log=$(cat "$dir/log")
   assert_contains "$log" "send:fm-lane:Stow" "node-wrapped codex lane was not recognized as the harness process"
+  assert_contains "$log" "send:firstmate:fm-lane:/quit" "node-wrapped codex lane exit command was not sent to raw target"
   assert_contains "$log" "spawn:lane --backend tmux --secondmate" "node-wrapped codex lane did not respawn"
   pass "fm-restart: tmux detects node-wrapped codex from pane process argv"
 }
@@ -232,12 +237,13 @@ test_herdr_live_lane_renames_spawns_then_closes_old_tab() {
   run_restart "$dir" "$root" "$fb" lane >/dev/null || fail "herdr live restart failed"
   log=$(cat "$dir/log")
   assert_contains "$log" "send:fm-lane:Stow" "herdr lane was not asked to stow and exit"
+  assert_contains "$log" "send:herdrtest:w1:p1:/quit" "herdr lane exit command was not sent unmarked to the raw target"
   assert_contains "$log" "herdr:tab rename w1:t1 old-fm-lane-" "herdr old tab was not renamed out of fm-lane"
   assert_contains "$log" "spawn:lane --backend herdr --secondmate" "herdr lane did not respawn through fm-spawn"
   assert_contains "$log" "herdr:pane close w1:p1" "herdr old pane was not closed after respawn"
   case "$log" in
-    *"herdr:tab rename w1:t1 old-fm-lane-"*$'\n'*"spawn:lane --backend herdr --secondmate"*$'\n'*"herdr:pane close w1:p1"*) ;;
-    *) fail "herdr restart order was not rename -> spawn -> close"$'\n'"$log" ;;
+    *"send:fm-lane:Stow"*$'\n'*"send:herdrtest:w1:p1:/quit"*$'\n'*"herdr:tab rename w1:t1 old-fm-lane-"*$'\n'*"spawn:lane --backend herdr --secondmate"*$'\n'*"herdr:pane close w1:p1"*) ;;
+    *) fail "herdr restart order was not marked stow -> raw exit -> rename -> spawn -> close"$'\n'"$log" ;;
   esac
   pass "fm-restart: live herdr lane renames old tab, respawns, then closes old tab"
 }
