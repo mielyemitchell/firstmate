@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Send one line of literal text to a crewmate endpoint, then Enter.
 # Usage: fm-send.sh <target> <text...>
-#   <target> may be a bare firstmate task name (fm-xyz), resolved through
-#   this home's state/<id>.meta, or an explicit backend target.
+#   <target> must be either a firstmate task selector (fm-xyz), resolved
+#   through this home's state/<id>.meta, or an explicit well-formed backend
+#   target. fm-send refuses unresolved/bare guesses rather than falling back to
+#   a tmux window search, because a "successful" send to the wrong endpoint is
+#   worse than a loud failure.
 # Special keys instead of text: fm-send.sh <target> --key Enter
 # Key support is backend-specific: tmux/herdr support Escape, Enter, and C-c;
 # Orca currently supports Enter and C-c only, and rejects Escape.
@@ -35,8 +38,21 @@ set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+
+if [ -z "${FM_HOME+x}" ] || [ -z "${FM_HOME:-}" ]; then
+  echo "error: FM_HOME is not set; fm-send refuses to resolve targets without an explicit firstmate home" >&2
+  exit 1
+fi
+
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+if [ ! -d "$FM_HOME" ]; then
+  echo "error: FM_HOME '$FM_HOME' is not a directory; fm-send cannot resolve this home's state" >&2
+  exit 1
+fi
+if [ ! -d "$STATE" ]; then
+  echo "error: state dir '$STATE' is missing; fm-send cannot resolve targets for FM_HOME '$FM_HOME'" >&2
+  exit 1
+fi
 
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
@@ -48,9 +64,123 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 fm_fleet_freeze_refuse "send" || exit 1
 "$SCRIPT_DIR/fm-guard.sh" || true
 
+fm_send_id_from_meta() {  # <meta-file>
+  local base
+  base=${1##*/}
+  printf '%s' "${base%.meta}"
+}
+
+fm_send_meta_for_key_value() {  # <state-dir> <key> <value>
+  local state=$1 key=$2 value=$3 meta got
+  for meta in "$state"/*.meta; do
+    [ -e "$meta" ] || continue
+    got=$(fm_meta_get "$meta" "$key")
+    [ "$got" = "$value" ] || continue
+    printf '%s' "$meta"
+    return 0
+  done
+  return 1
+}
+
+fm_send_count_colons() {  # <string>
+  local s=$1 no_colons
+  no_colons=${s//:/}
+  printf '%s' $(( ${#s} - ${#no_colons} ))
+}
+
+fm_send_resolve_target() {  # <raw-target>
+  local raw=$1 meta stripped_meta direct_meta pane_meta target backend assumed colons id session hint
+
+  RESOLVED_TARGET=""
+  TARGET_BACKEND=""
+  TARGET_HARNESS=""
+  EXPECTED_LABEL=""
+  TARGET_META=""
+  RESOLUTION_TRIED=""
+
+  case "$raw" in
+    fm-*)
+      stripped_meta="$STATE/${raw#fm-}.meta"
+      direct_meta="$STATE/$raw.meta"
+      RESOLUTION_TRIED="meta=$stripped_meta; bare-id-meta=$direct_meta; backend=from-meta"
+      if [ ! -f "$stripped_meta" ]; then
+        if [ -f "$direct_meta" ]; then
+          echo "error: target '$raw' is a bare task/lane id with metadata at $direct_meta; did you mean fm-$raw? (tried $RESOLUTION_TRIED)" >&2
+          return 1
+        fi
+        echo "error: no metadata for $raw in $STATE (tried $RESOLUTION_TRIED); pass a well-formed explicit backend target only when targeting outside this firstmate home" >&2
+        return 1
+      fi
+      target=$(fm_backend_target_of_meta "$stripped_meta")
+      if [ -z "$target" ]; then
+        echo "error: no backend target recorded in $stripped_meta (tried $RESOLUTION_TRIED)" >&2
+        return 1
+      fi
+      backend=$(fm_backend_of_meta "$stripped_meta")
+      RESOLVED_TARGET=$target
+      TARGET_BACKEND=$backend
+      TARGET_META=$stripped_meta
+      TARGET_HARNESS=$(fm_meta_get "$stripped_meta" harness)
+      EXPECTED_LABEL=$raw
+      return 0
+      ;;
+  esac
+
+  direct_meta="$STATE/$raw.meta"
+  if [ -f "$direct_meta" ]; then
+    echo "error: target '$raw' is a bare task/lane id with metadata at $direct_meta; did you mean fm-$raw? (tried meta=$direct_meta; backend=none)" >&2
+    return 1
+  fi
+
+  pane_meta=$(fm_send_meta_for_key_value "$STATE" herdr_pane_id "$raw" 2>/dev/null || true)
+  if [ -n "$pane_meta" ]; then
+    session=$(fm_meta_get "$pane_meta" herdr_session)
+    hint="${session:-<herdr-session>}:$raw"
+    id=$(fm_send_id_from_meta "$pane_meta")
+    echo "error: target '$raw' matches herdr_pane_id in $pane_meta but is missing its herdr session prefix; expected <herdr-session>:<pane-id> such as '$hint' or use 'fm-$id' (tried meta=$STATE/$raw.meta; backend=herdr)" >&2
+    return 1
+  fi
+
+  meta=$(fm_backend_meta_for_window "$raw" "$STATE" 2>/dev/null || true)
+  if [ -n "$meta" ]; then
+    target=$(fm_backend_target_of_meta "$meta")
+    if [ -z "$target" ]; then
+      echo "error: no backend target recorded in $meta (tried explicit target '$raw' via recorded window/terminal; backend=from-meta)" >&2
+      return 1
+    fi
+    RESOLVED_TARGET=$target
+    TARGET_BACKEND=$(fm_backend_of_meta "$meta")
+    TARGET_META=$meta
+    TARGET_HARNESS=$(fm_meta_get "$meta" harness)
+    RESOLUTION_TRIED="explicit target '$raw' matched $meta; backend=$TARGET_BACKEND"
+    return 0
+  fi
+
+  case "$raw" in
+    *:*)
+      colons=$(fm_send_count_colons "$raw")
+      if [ "$colons" -ge 2 ]; then
+        assumed=herdr
+      else
+        assumed=tmux
+      fi
+      RESOLVED_TARGET=$raw
+      TARGET_BACKEND=$assumed
+      RESOLUTION_TRIED="meta=$STATE/$raw.meta; metadata window/terminal lookup; backend=$assumed"
+      return 0
+      ;;
+  esac
+
+  echo "error: target '$raw' is not resolvable (tried meta=$STATE/$raw.meta; metadata window/terminal lookup; backend=none). Use fm-$raw for a recorded task/lane, or pass a well-formed explicit backend target such as session:window." >&2
+  return 1
+}
+
 RAW_TARGET=$1
-T=$(fm_backend_resolve_selector "$1" "$STATE")
+fm_send_resolve_target "$RAW_TARGET" || exit 1
+T=$RESOLVED_TARGET
 shift
+
+fm_backend_validate "$TARGET_BACKEND" || exit 1
 
 # Mark a from-firstmate -> secondmate request. Only a bare `fm-<id>` target,
 # resolved through this home's meta and recording kind=secondmate, is marked: the
@@ -60,7 +190,7 @@ shift
 MARK_PREFIX=""
 case "$RAW_TARGET" in
   fm-*)
-    meta="$STATE/${RAW_TARGET#fm-}.meta"
+    meta="$TARGET_META"
     if [ -f "$meta" ] && grep -q '^kind=secondmate$' "$meta" 2>/dev/null; then
       MARK_PREFIX="$FM_FROMFIRST_MARK"
     fi
@@ -71,22 +201,22 @@ esac
 # scope the codex `$<skill>` popup-settle below. A bare fm-<id> target carries
 # meta; an explicit backend-target escape hatch has none, so its harness is
 # unknown and treated as non-codex (the safe default that keeps the fast path).
-# The target's BACKEND comes from fm-<id> meta, or from matching the resolved
-# explicit target back to recorded meta, then falls back to tmux.
-TARGET_HARNESS=""
-TARGET_BACKEND=$(fm_backend_of_selector "$RAW_TARGET" "$T" "$STATE")
-EXPECTED_LABEL=$(fm_backend_expected_label_of_selector "$RAW_TARGET" "$STATE")
+# The target's BACKEND comes from fm-<id> meta, from matching an explicit target
+# back to recorded meta, or from strict explicit-target shape validation.
 case "$RAW_TARGET" in
   fm-*)
-    meta="$STATE/${RAW_TARGET#fm-}.meta"
-    if [ -f "$meta" ]; then
-      TARGET_HARNESS=$(fm_meta_get "$meta" harness)
+    if ! fm_backend_target_exists "$TARGET_BACKEND" "$T" "$EXPECTED_LABEL"; then
+      echo "error: resolved target '$RAW_TARGET' to '$T' via $TARGET_META, but backend endpoint is not live (tried $RESOLUTION_TRIED; backend=$TARGET_BACKEND)" >&2
+      exit 1
     fi
     ;;
 esac
 
 if [ "${1:-}" = "--key" ]; then
-  fm_backend_send_key "$TARGET_BACKEND" "$T" "$2" "$EXPECTED_LABEL"
+  if ! fm_backend_send_key "$TARGET_BACKEND" "$T" "$2" "$EXPECTED_LABEL"; then
+    echo "error: key '$2' not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
+    exit 1
+  fi
 else
   # Slash commands open a completion popup in some TUIs (verified on codex);
   # submitting too fast selects nothing, so give the popup time to settle before
@@ -107,14 +237,17 @@ else
   sleep_s=${FM_SEND_SLEEP:-0.4}
   # Type once, submit, verify. Lenient: only a positively-confirmed swallow
   # (text still in the composer) is an error; an unreadable pane is assumed sent.
-  verdict=$(fm_backend_send_text_submit "$TARGET_BACKEND" "$T" "$MARK_PREFIX$*" "$retries" "$sleep_s" "$settle" "$EXPECTED_LABEL")
+  if ! verdict=$(fm_backend_send_text_submit "$TARGET_BACKEND" "$T" "$MARK_PREFIX$*" "$retries" "$sleep_s" "$settle" "$EXPECTED_LABEL"); then
+    echo "error: text not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
+    exit 1
+  fi
   case "$verdict" in
     pending)
-      echo "error: text not submitted to $T (Enter swallowed; text left in composer)" >&2
+      echo "error: text not submitted to $T (Enter swallowed; text left in composer; tried $RESOLUTION_TRIED)" >&2
       exit 1
       ;;
     send-failed)
-      echo "error: text not sent to $T ($TARGET_BACKEND send failed)" >&2
+      echo "error: text not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
       exit 1
       ;;
   esac

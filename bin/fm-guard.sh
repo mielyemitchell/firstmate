@@ -107,6 +107,7 @@ if [ "$watcher_fresh" = false ]; then
     else
       printf '●  Trust bin/fm-watch-arm.sh for the true state: it confirms a live watcher and a fresh beacon, or fails loudly.\n'
     fi
+    printf '●  This is a supervision warning only; the requested message WILL still be sent.\n'
     printf '●  %s\n' "$fix"
     printf '●%s\n' "$rule"
   } >&2
