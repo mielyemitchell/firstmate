@@ -16,6 +16,11 @@ set -u
 # shellcheck source=bin/fm-supervision-lib.sh
 . "$ROOT/bin/fm-supervision-lib.sh"
 
+# The hook honors ambient FM_HOME/FM_STATE_OVERRIDE/FM_ROOT_OVERRIDE by design;
+# drop any inherited from the invoking shell so hermetic scenarios read only
+# their own temp dirs. Tests that exercise these knobs set them inline.
+unset FM_HOME FM_STATE_OVERRIDE FM_ROOT_OVERRIDE
+
 TMP_ROOT=$(fm_test_tmproot fm-turnend-guard)
 fm_git_identity fmtest fmtest@example.invalid
 
