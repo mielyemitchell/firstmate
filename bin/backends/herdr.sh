@@ -374,6 +374,18 @@ fm_backend_herdr_target_ready() {  # <target>
   fm_backend_herdr_server_ensure "$FM_BACKEND_HERDR_SESSION" || return 1
 }
 
+fm_backend_herdr_target_label_matches() {  # <target> <expected-label>
+  local target=$1 expected_label=$2 out tab_id label
+  [ -n "$expected_label" ] || return 0
+  fm_backend_herdr_parse_target "$target" || return 1
+  out=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null) || return 1
+  tab_id=$(printf '%s' "$out" | jq -r '.result.pane.tab_id // empty' 2>/dev/null)
+  [ -n "$tab_id" ] || return 1
+  label=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" tab list 2>/dev/null \
+    | jq -r --arg tab "$tab_id" '.result.tabs[]? | select(.tab_id == $tab) | .label' 2>/dev/null | head -1)
+  [ "$label" = "$expected_label" ]
+}
+
 # fm_backend_herdr_current_path: the live FOREGROUND process's cwd, or empty on
 # any error. Mirrors tmux's pane_current_path poll used for worktree-path
 # discovery after `treehouse get`.
@@ -570,8 +582,9 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
 # fm_backend_herdr_kill: remove the task's pane, best-effort (mirrors
 # tmux-kill-window's `|| true` contract). Verified: closing a tab's only pane
 # closes the tab too, so a separate tab close is unnecessary.
-fm_backend_herdr_kill() {  # <target>
+fm_backend_herdr_kill() {  # <target> [expected-label]
   fm_backend_herdr_target_ready "$1" || return 0
+  fm_backend_herdr_target_label_matches "$1" "${2:-}" || return 1
   fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane close "$FM_BACKEND_HERDR_PANE" >/dev/null 2>&1 || true
 }
 
@@ -579,9 +592,10 @@ fm_backend_herdr_kill() {  # <target>
 # from herdr's process-info primitive. This deliberately excludes herdr's
 # persisted agent metadata because an exited agent can leave stale agent labels
 # behind while the foreground process has returned to a shell.
-fm_backend_herdr_foreground_process() {  # <target>
+fm_backend_herdr_foreground_process() {  # <target> [expected-label]
   local out
   fm_backend_herdr_target_ready "$1" || return 0
+  fm_backend_herdr_target_label_matches "$1" "${2:-}" || return 0
   out=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane process-info --pane "$FM_BACKEND_HERDR_PANE" 2>/dev/null) || return 0
   printf '%s' "$out" | jq -r '
     .result.process_info.foreground_processes[]? |
@@ -594,9 +608,10 @@ fm_backend_herdr_foreground_process() {  # <target>
   ' 2>/dev/null
 }
 
-fm_backend_herdr_relabel_task() {  # <target> <new-label>
+fm_backend_herdr_relabel_task() {  # <target> <new-label> [expected-label]
   local target=$1 new_label=$2 tab_id
   fm_backend_herdr_target_ready "$target" || return 1
+  fm_backend_herdr_target_label_matches "$target" "${3:-}" || return 1
   tab_id=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
     | jq -r '.result.pane.tab_id // empty' 2>/dev/null)
   [ -n "$tab_id" ] || { echo "error: could not resolve herdr tab id for $target" >&2; return 1; }
