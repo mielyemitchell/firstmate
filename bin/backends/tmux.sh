@@ -110,7 +110,40 @@ fm_backend_tmux_kill() {  # <target>
 # fm_backend_tmux_foreground_process: expose tmux's structured current command
 # for callers that need to know whether the launched harness is still running.
 fm_backend_tmux_foreground_process() {  # <target>
-  tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null || true
+  local target=$1 pane_pid processes
+  pane_pid=$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null || true)
+  if [ -n "$pane_pid" ]; then
+    processes=$(ps -axo pid=,ppid=,stat=,command= 2>/dev/null | awk -v root="$pane_pid" '
+      {
+        pid = $1
+        ppid = $2
+        stat = $3
+        command = $0
+        sub(/^[[:space:]]*[0-9]+[[:space:]]+[0-9]+[[:space:]]+[^[:space:]]+[[:space:]]+/, "", command)
+        parent[pid] = ppid
+        state[pid] = stat
+        cmd[pid] = command
+      }
+      END {
+        child[root] = 1
+        changed = 1
+        while (changed) {
+          changed = 0
+          for (pid in parent) {
+            if (!child[pid] && child[parent[pid]]) {
+              child[pid] = 1
+              changed = 1
+            }
+          }
+        }
+        for (pid in cmd) {
+          if (pid != root && child[pid] && state[pid] !~ /^Z/) print cmd[pid]
+        }
+      }
+    ' || true)
+    [ -z "$processes" ] || { printf '%s\n' "$processes"; return 0; }
+  fi
+  tmux display-message -p -t "$target" '#{pane_current_command}' 2>/dev/null || true
 }
 
 fm_backend_tmux_relabel_task() {  # <target> <new-label>

@@ -24,7 +24,10 @@ SH
 set -u
 printf 'send:%s:%s\n' "${1:-}" "${2:-}" >> "$FM_RESTART_LOG"
 case "${1:-}:${2:-}" in
-  fm-lane:Stow*) printf 'zsh\n' > "$FM_FAKE_COMMAND_FILE" ;;
+  fm-lane:Stow*)
+    printf 'zsh\n' > "$FM_FAKE_COMMAND_FILE"
+    printf 'zsh\n' > "$FM_FAKE_PROCESS_ARGV_FILE"
+    ;;
 esac
 exit 0
 SH
@@ -51,6 +54,7 @@ case "${1:-}" in
       exit 1
     fi
     case "$*" in
+      *pane_pid*) printf '100\n'; exit 0 ;;
       *pane_current_command*) cat "$FM_FAKE_COMMAND_FILE"; exit 0 ;;
       *pane_id*) printf '%%1\n'; exit 0 ;;
     esac
@@ -62,7 +66,17 @@ case "${1:-}" in
 esac
 exit 0
 SH
-  chmod +x "$fb/tmux"
+  cat > "$fb/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = -axo ]; then
+  printf '100 1 Ss zsh\n'
+  printf '101 100 S %s\n' "$(cat "$FM_FAKE_PROCESS_ARGV_FILE" 2>/dev/null || cat "$FM_FAKE_COMMAND_FILE")"
+  exit 0
+fi
+exit 1
+SH
+  chmod +x "$fb/tmux" "$fb/ps"
   printf '%s\n' "$fb"
 }
 
@@ -96,7 +110,7 @@ case "$cmd" in
     printf 'label:%s\n' "${args[3]:-}" > "$FM_FAKE_LABEL_FILE"
     ;;
   "pane close")
-    printf '0\n' > "$FM_FAKE_EXISTS_FILE"
+    [ -f "$FM_FAKE_CLOSE_STICKS_FILE" ] || printf '0\n' > "$FM_FAKE_EXISTS_FILE"
     ;;
 esac
 exit 0
@@ -111,6 +125,7 @@ new_case() {
   mkdir -p "$dir/home/state" "$dir/home/data" "$dir/home/config"
   printf '1\n' > "$dir/exists"
   printf 'codex\n' > "$dir/command"
+  printf 'codex\n' > "$dir/process-argv"
   : > "$dir/log"
   printf '%s\n' "$dir"
 }
@@ -138,9 +153,12 @@ run_restart() {  # <case-dir> <root> <fakebin> [args...]
     FM_RESTART_LOG="$dir/log" \
     FM_FAKE_EXISTS_FILE="$dir/exists" \
     FM_FAKE_COMMAND_FILE="$dir/command" \
+    FM_FAKE_PROCESS_ARGV_FILE="$dir/process-argv" \
     FM_FAKE_LABEL_FILE="$dir/label" \
+    FM_FAKE_CLOSE_STICKS_FILE="$dir/close-sticks" \
     FM_RESTART_TIMEOUT="${FM_RESTART_TIMEOUT:-1}" \
     FM_RESTART_FORCE_TIMEOUT="${FM_RESTART_FORCE_TIMEOUT:-1}" \
+    FM_RESTART_CLEANUP_TIMEOUT="${FM_RESTART_CLEANUP_TIMEOUT:-1}" \
     FM_RESTART_POLL_INTERVAL=1 \
     "$root/bin/fm-restart.sh" "$@"
 }
@@ -194,6 +212,19 @@ test_tmux_live_lane_stows_exits_kills_then_respawns() {
   pass "fm-restart: live tmux lane stows/exits, kills old window, respawns"
 }
 
+test_tmux_node_wrapped_codex_stows_before_respawn() {
+  local dir root fb log
+  dir=$(new_case tmux-node-codex); root=$(make_restart_root "$dir"); fb=$(make_fake_tmux "$dir")
+  printf 'node\n' > "$dir/command"
+  printf 'node /opt/homebrew/bin/codex.js\n' > "$dir/process-argv"
+  write_lane_meta "$dir" secondmate tmux firstmate:fm-lane
+  run_restart "$dir" "$root" "$fb" lane >/dev/null || fail "tmux node-wrapped codex restart failed"
+  log=$(cat "$dir/log")
+  assert_contains "$log" "send:fm-lane:Stow" "node-wrapped codex lane was not recognized as the harness process"
+  assert_contains "$log" "spawn:lane --backend tmux --secondmate" "node-wrapped codex lane did not respawn"
+  pass "fm-restart: tmux detects node-wrapped codex from pane process argv"
+}
+
 test_herdr_live_lane_renames_spawns_then_closes_old_tab() {
   local dir root fb log
   dir=$(new_case herdr-live); root=$(make_restart_root "$dir"); fb=$(make_fake_herdr "$dir")
@@ -209,6 +240,19 @@ test_herdr_live_lane_renames_spawns_then_closes_old_tab() {
     *) fail "herdr restart order was not rename -> spawn -> close"$'\n'"$log" ;;
   esac
   pass "fm-restart: live herdr lane renames old tab, respawns, then closes old tab"
+}
+
+test_herdr_cleanup_failure_refuses_success() {
+  local dir root fb out status
+  dir=$(new_case herdr-close-sticks); root=$(make_restart_root "$dir"); fb=$(make_fake_herdr "$dir")
+  touch "$dir/close-sticks"
+  write_lane_meta "$dir" secondmate herdr herdrtest:w1:p1
+  FM_RESTART_CLEANUP_TIMEOUT=0 out=$(run_restart "$dir" "$root" "$fb" lane 2>&1); status=$?
+  [ "$status" -ne 0 ] || fail "herdr restart should fail when the old pane remains after cleanup"
+  assert_contains "$out" "old herdr endpoint herdrtest:w1:p1 for lane still exists after cleanup" "herdr cleanup failure did not surface manual cleanup"
+  assert_contains "$(cat "$dir/log")" "spawn:lane --backend herdr --secondmate" "herdr cleanup check should happen after replacement spawn"
+  assert_not_contains "$out" "restart: lane refreshed" "herdr cleanup failure must not report refreshed"
+  pass "fm-restart: herdr cleanup verifies the old endpoint is gone before success"
 }
 
 test_timeout_aborts_without_force() {
@@ -254,6 +298,8 @@ test_refuses_non_secondmate
 test_dead_lane_respawns_without_nudge
 test_refuses_unsupported_backend
 test_tmux_live_lane_stows_exits_kills_then_respawns
+test_tmux_node_wrapped_codex_stows_before_respawn
 test_herdr_live_lane_renames_spawns_then_closes_old_tab
+test_herdr_cleanup_failure_refuses_success
 test_timeout_aborts_without_force
 test_force_uses_exit_sequence_then_respawns
