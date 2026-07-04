@@ -628,3 +628,34 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
       ;;
   esac
 }
+
+# fm_backend_foreground_process: best-effort structured read of the foreground
+# process command(s) currently running inside TARGET. Empty output means no
+# harness-like foreground process could be read. Callers must not parse pane
+# chat to infer exit when this primitive is available.
+fm_backend_foreground_process() {  # <backend> <target> [expected-label]
+  local backend=$1
+  shift
+  fm_backend_source "$backend" || return 1
+  case "$backend" in
+    tmux) fm_backend_tmux_foreground_process "$@" ;;
+    herdr) fm_backend_herdr_foreground_process "$@" ;;
+    zellij) printf '' ;;
+    orca) printf '' ;;
+    *) echo "error: no foreground-process implementation for backend '$backend'" >&2; return 1 ;;
+  esac
+}
+
+# fm_backend_relabel_task: rename the backend task container that owns TARGET.
+# Used before herdr restarts so fm-spawn's duplicate-label check can create a
+# fresh fm-<id> tab before the old tab is closed.
+fm_backend_relabel_task() {  # <backend> <target> <new-label> [expected-label]
+  local backend=$1
+  shift
+  fm_backend_source "$backend" || return 1
+  case "$backend" in
+    tmux) fm_backend_tmux_relabel_task "$@" ;;
+    herdr) fm_backend_herdr_relabel_task "$@" ;;
+    *) echo "error: no relabel implementation for backend '$backend'" >&2; return 1 ;;
+  esac
+}
