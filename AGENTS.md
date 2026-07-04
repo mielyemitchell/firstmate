@@ -177,7 +177,7 @@ Otherwise it prints one line per problem or capability fact; handle each:
   It prints only when `config/backlog-backend` is absent or set to `tasks-axi` and the compatibility probe accepts `tasks-axi --version` as 0.1.1 or newer.
   If the backend is not opted out and `tasks-axi` is missing or incompatible, bootstrap reports `MISSING: tasks-axi (install: npm install -g tasks-axi)` but still falls back to hand-editing and never blocks work.
   If `config/backlog-backend=manual`, bootstrap hand-edits and does not suggest installing `tasks-axi`.
-- `NUDGE_SECONDMATES: <window-targets...>` - the secondmate sweep fast-forwarded one or more *running* secondmate homes to firstmate's current version and their instruction surface (`AGENTS.md`, `bin/`, or `.agents/skills/`) actually changed; for each listed window, send a one-line re-read nudge with `bin/fm-send.sh <window-target> 'firstmate was updated to the latest - please re-read your AGENTS.md to pick up the new instructions.'` so that secondmate picks up its new instructions.
+- `NUDGE_SECONDMATES: <window-targets...>` - the secondmate sweep fast-forwarded one or more _running_ secondmate homes to firstmate's current version and their instruction surface (`AGENTS.md`, `bin/`, or `.agents/skills/`) actually changed; for each listed window, send a one-line re-read nudge with `bin/fm-send.sh <window-target> 'firstmate was updated to the latest - please re-read your AGENTS.md to pick up the new instructions.'` so that secondmate picks up its new instructions.
   This mirrors `/updatefirstmate`'s `nudge-secondmates:` report: it is a gentle steer, never an interruption, and the fast-forward already landed safely.
   A secondmate that was skipped, already current, or whose advance changed no instructions is not listed and must not be disturbed.
 - `FMX: X mode on ...` / `FMX: X mode off ...` - bootstrap confirmed or removed the local X-mode poll artifacts; follow section 14 for watcher cadence restart only when a running watcher needs the transition applied immediately.
@@ -218,11 +218,19 @@ Schema:
   "rules": [
     {
       "when": "<natural-language condition describing a kind of task>",
-      "use": { "harness": "<adapter>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max, optional>" },
+      "use": {
+        "harness": "<adapter>",
+        "model": "<optional model>",
+        "effort": "<low|medium|high|xhigh|max, optional>"
+      },
       "why": "<optional rationale that helps firstmate choose>"
     }
   ],
-  "default": { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>" }
+  "default": {
+    "harness": "<adapter>",
+    "model": "<optional model>",
+    "effort": "<optional effort>"
+  }
 }
 ```
 
@@ -375,14 +383,14 @@ Do not eagerly backfill every project.
 
 Route each piece of durable knowledge to its most specific home:
 
-| Kind of knowledge | Home |
-| --- | --- |
-| Captain preferences and working style | `data/captain.md` |
-| Project-intrinsic knowledge | that project's own `AGENTS.md`, via normal crewmate delivery, never hand-written by firstmate |
-| Fleet-local operational facts and gotchas | `data/learnings.md` |
-| Knowledge generalizable to every firstmate user | the shared `AGENTS.md`, shipped via PR through the pipeline |
-| Task-scoped notes | backlog item notes (`tasks-axi update <id> --append "<note>"`, or hand-edit per the active backend) |
-| Investigation findings | scout reports at `data/<id>/report.md` |
+| Kind of knowledge                               | Home                                                                                                |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Captain preferences and working style           | `data/captain.md`                                                                                   |
+| Project-intrinsic knowledge                     | that project's own `AGENTS.md`, via normal crewmate delivery, never hand-written by firstmate       |
+| Fleet-local operational facts and gotchas       | `data/learnings.md`                                                                                 |
+| Knowledge generalizable to every firstmate user | the shared `AGENTS.md`, shipped via PR through the pipeline                                         |
+| Task-scoped notes                               | backlog item notes (`tasks-axi update <id> --append "<note>"`, or hand-edit per the active backend) |
+| Investigation findings                          | scout reports at `data/<id>/report.md`                                                              |
 
 When the captain invokes `/stow`, load the `stow` skill.
 It sweeps the current session for uncaptured durable knowledge, routes findings with this table, files undone next steps to the backlog, and reports whether the session is safe to reset.
@@ -556,7 +564,7 @@ Use chat for yes/no decisions; use lavish-axi when there are multiple findings o
 Judge a validating crewmate by the run's step status, never by whether its shell is still running.
 Read its current state with `bin/fm-crew-state.sh <id>`: a deterministic, token-tight one-line read that takes the matching no-mistakes run-step as the source of truth and reconciles it against the crewmate's `state/<id>.status` log.
 Because the run-step is authoritative before pane liveness, a crewmate whose window closed after or during validation can still report `done` or `working` from its run; a missing pane becomes `unknown` only when no matching run exists.
-That log is an append-only wake-*event* log, not a current-state field, and it goes stale the moment a resolved gate lets the run resume: after you answer a `needs-decision`/`blocked` and the crewmate silently resumes (responds to the gate, the pipeline fixes, it re-validates), the log's last line still reads `needs-decision`/`blocked` while the run-step has moved on.
+That log is an append-only wake-_event_ log, not a current-state field, and it goes stale the moment a resolved gate lets the run resume: after you answer a `needs-decision`/`blocked` and the crewmate silently resumes (responds to the gate, the pipeline fixes, it re-validates), the log's last line still reads `needs-decision`/`blocked` while the run-step has moved on.
 So never infer current state from a `tail` of that log; `bin/fm-crew-state.sh` reports the live run-step state and explicitly flags the stale log line superseded, where a raw `tail` would mislead you into re-escalating settled work.
 The fields below name the run-step states and outcomes it reads from `no-mistakes axi status`; run that command directly when you want the full gate findings.
 
@@ -589,7 +597,7 @@ The script refuses if the worktree holds uncommitted changes or committed work t
 "Landed" is broader than remote-reachable: for a normal ship task whose commits are not reachable from any remote-tracking branch, the script also accepts the work when its PR is merged and GitHub reports a PR head that contains the current local work, or when its content is already present in the up-to-date default branch.
 Containment means local `HEAD` is the PR head, local `HEAD` is an ancestor of the PR head, or the unpushed local patches have matching patch IDs in that PR head after no-mistakes replayed the branch.
 This recognizes the common squash-merge-then-delete-branch flow, where the branch's own commits live nowhere on a remote yet the change is fully in `main`; a merged-and-deleted branch now tears down cleanly instead of false-refusing.
-The PR is looked up from the task's recorded `pr=` when present, or, when no `pr=` was ever recorded, by finding a merged PR whose head branch matches the worktree's branch and fetching its head via `refs/pull/<n>/head` if the branch itself was deleted - so a task whose merge skipped `bin/fm-pr-check.sh` (typically a yolo-authorized merge on a repo with no PR CI, where the "checks green" trigger never fires) still tears down cleanly instead of false-refusing.
+The PR is looked up from the task's recorded `pr=` when present and its head branch matches the branch being verified, or otherwise - including when no `pr=` was ever recorded, and for campaign batch branches whose own PR is not the last-recorded one - by finding a merged PR whose head branch matches that branch and fetching its head via `refs/pull/<n>/head` if the branch itself was deleted - so a task whose merge skipped `bin/fm-pr-check.sh` (typically a yolo-authorized merge on a repo with no PR CI, where the "checks green" trigger never fires) still tears down cleanly instead of false-refusing, and each campaign batch branch is verified against its own PR rather than the task's last-recorded one.
 Genuinely unlanded work (no merged PR head containing the local work and content not in the default branch) and dirty worktrees still refuse, and a gh lookup error falls back to the content check rather than silently allowing.
 Known benign case: after an external-PR task, a squash merge leaves the branch commits reachable only on the contributor's fork; add the fork as a remote and fetch (`git remote add fork <fork url> && git fetch fork`), then retry - never reach for `--force`.
 After a successful PR-based teardown, it also runs `bin/fm-fleet-sync.sh` for that project, best-effort, so safe clone states catch up to the merge, clean detached ancestor drift self-heals, and the just-merged branch, now gone on the remote and free of its worktree, is pruned immediately.
@@ -646,7 +654,7 @@ For a fresh `stale` pane, the watcher checks the same positive evidence before t
 The watcher reads that evidence with `bin/fm-crew-state.sh` (run-step first, then pane), so a finish that wrote no `done:` status - for example one reported only through interactive pane menus - is no longer swallowed.
 A `heartbeat` with no captain-relevant change is likewise absorbed.
 Absorbed wakes are advanced past their suppression marker and logged to `state/.watch-triage.log` while the watcher keeps blocking - no queue entry, no exit, no LLM turn.
-It exits with one reason line on an *actionable* wake: a `signal` carrying a captain-relevant verb (`needs-decision:`/`blocked:`/`failed:`/`done:`/`PR ready`/`checks green`/`ready in branch`/`merged`); a no-verb `signal` whose crewmate is NOT provably working (it stopped its turn with no running pipeline and no busy pane, so it may be done, waiting on a decision, or wedged); any `check`; a `stale` whose crewmate is not provably working, whether or not its status log's last line is captain-relevant (surfaced at once, never left to wait out the timer); a provably-working `stale` that stays idle past the wedge threshold (`FM_STALE_ESCALATE_SECS`, default 240s); or the heartbeat fleet-scan's fail-safe backstop catching a captain-relevant status the per-wake path missed.
+It exits with one reason line on an _actionable_ wake: a `signal` carrying a captain-relevant verb (`needs-decision:`/`blocked:`/`failed:`/`done:`/`PR ready`/`checks green`/`ready in branch`/`merged`); a no-verb `signal` whose crewmate is NOT provably working (it stopped its turn with no running pipeline and no busy pane, so it may be done, waiting on a decision, or wedged); any `check`; a `stale` whose crewmate is not provably working, whether or not its status log's last line is captain-relevant (surfaced at once, never left to wait out the timer); a provably-working `stale` that stays idle past the wedge threshold (`FM_STALE_ESCALATE_SECS`, default 240s); or the heartbeat fleet-scan's fail-safe backstop catching a captain-relevant status the per-wake path missed.
 A captain-relevant status-log line does not by itself make a stale pane terminal: a crewmate gets no new status entry once firstmate hands it to a no-mistakes validation, so its last line can still read `done:` from BEFORE that validation started for the run's entire duration; a provably-working crew therefore always wins over that stale line and is absorbed (with the same wedge-escalation safety net), and only a crewmate that is NOT provably working has its status log trusted to decide terminal-vs-non-terminal.
 Only an actionable wake is written to the durable queue at `state/.wake-queue` - before advancing suppression markers such as `.seen-*`, `.stale-*`, `.last-check`, or `.last-heartbeat` - and only an actionable wake ends the background task, so you re-arm exactly once per actionable event instead of once per wake.
 That is what eliminates the quiet-stretch churn without swallowing a finish: during a long crew validation the run is actively running, so the crewmate's `turn-ended`/`working:`/stale wakes (and no-change heartbeats) are absorbed in bash, the liveness beacon (`state/.last-watcher-beat`) stays fresh the whole time so `fm-guard.sh` never false-alarms, and your LLM is woken only when something genuinely needs you - including the moment that crewmate stops with no running pipeline, which now surfaces immediately.
@@ -690,7 +698,7 @@ On wake, in order of cheapness:
 
 1. Read the reason line and drain queued wake records with `bin/fm-wake-drain.sh`.
 2. `signal:` read the listed status files first; a wake lists every signal that landed within the coalescing grace window (e.g. a status write plus the same turn's turn-end marker), and each is ~30 tokens and usually sufficient.
-   A status line is the wake *event*, not the crewmate's current state; when you need the live state - especially to confirm a `needs-decision`/`blocked` is still real and not already resolved-and-resumed - read it with `bin/fm-crew-state.sh <id>`, which reconciles the authoritative run-step over the possibly-stale log line, and never `tail` the status log as the current-state source.
+   A status line is the wake _event_, not the crewmate's current state; when you need the live state - especially to confirm a `needs-decision`/`blocked` is still real and not already resolved-and-resumed - read it with `bin/fm-crew-state.sh <id>`, which reconciles the authoritative run-step over the possibly-stale log line, and never `tail` the status log as the current-state source.
 3. `stale:` the crewmate stopped without reporting; peek the pane (`bin/fm-peek.sh <window>`) to diagnose.
    If the pane is waiting, looping, confused, or unresponsive, load `stuck-crewmate-recovery`.
 4. `check:` a per-task poll fired (usually a merge, or X mode when enabled); act on it.
@@ -790,12 +798,15 @@ Update it on every dispatch, completion, and decision.
 
 ```markdown
 ## In flight
+
 - [ ] <id> - <one line> (repo: <name>, since <date>)
 
 ## Queued
+
 - [ ] <id> - <one line> (repo: <name>) blocked-by: <id> - <reason>
 
 ## Done
+
 - [x] <id> - <one line> - <https://github.com/owner/repo/pull/number> (merged <date>)
 - [x] <id> - <one line> - local main (merged <date>)
 - [x] <id> - <one line> - data/<id>/report.md (reported <date>)
@@ -819,9 +830,9 @@ When hand-editing, prune older Done entries manually whenever you add to the sec
 Pruning loses nothing: finished PR-based ship and campaign tasks live on as GitHub PRs, local-only ship tasks live on in local `main`, and scout tasks live on as report files.
 Map firstmate's real backlog operations to the approved commands:
 
-- File an item: `tasks-axi add <id> "<one line>" --kind <ship|scout> --repo <name>`, plus `--start` for immediate dispatch (In flight) or the default queue placement, and `--blocked-by <id>` (repeatable) when it waits on another task.
+- File an item: `tasks-axi add <id> "<one line>" --kind <ship|scout|campaign> --repo <name>`, plus `--start` for immediate dispatch (In flight) or the default queue placement, and `--blocked-by <id>` (repeatable) when it waits on another task.
 - Start an existing queued item: `tasks-axi start <id>` before dispatching work from Queued, after checking that blockers are gone and any time/date gate has arrived.
-- Move a finished task to Done: `tasks-axi done <id> --pr <url>` for a PR-based ship, `--report <path>` for a scout, or `--note "local main"` for a local-only merge.
+- Move a finished task to Done: `tasks-axi done <id> --pr <url>` for a PR-based ship or campaign (a campaign records its final batch PR), `--report <path>` for a scout, or `--note "local main"` for a local-only merge.
 - Append a status note: `tasks-axi update <id> --append "<note>"`; replace fields with `--title`, `--body`, or `--body-file <path>`.
 - Manage dependencies: `tasks-axi block <id> --by <other>` and `tasks-axi unblock <id> --by <other>`, then `tasks-axi ready` to list queued work with no unresolved blockers.
   This is a dependency check only; future-dated items still stay queued until their date arrives.

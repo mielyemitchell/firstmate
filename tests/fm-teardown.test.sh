@@ -40,6 +40,8 @@
 #   (t) campaign + all batch branches landed, HEAD detached     -> ALLOW + all fm/<id>/* refs deleted
 #   (u) local-only campaign + unmerged fm/<id> branch,
 #       HEAD detached at origin/main                            -> REFUSE (not HEAD-scoped)
+#   (v) campaign + recorded pr= is the LAST batch PR, earlier batch branch has
+#       its own merged PR and an inconclusive content check     -> ALLOW (per-branch PR lookup)
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -244,6 +246,38 @@ land_equivalent_patch_on_origin_branch() {
   git -C "$case_dir/project" fetch -q origin "$branch"
   rm -rf "$tmp"
   git -C "$case_dir/project" rev-parse "refs/remotes/origin/$branch"
+}
+
+# Override GitHub lookups with one merged PR per campaign batch branch:
+# PR 7 (head branch fm/task-x1/b1) and PR 8 (head branch fm/task-x1/b2), each
+# reporting its own head oid and headRefName. Args: case_dir b1_head b2_head
+add_gh_prs_merged_per_batch_branch() {
+  local case_dir=$1 b1_head=$2 b2_head=$3
+  cat > "$case_dir/fakebin/gh-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = pr ] && [ "${2:-}" = list ]; then
+  case " $* " in
+    *" --head fm/task-x1/b1 "*)
+      printf '%s\n' "count: 1 (showing first 1)" "pull_requests[1]{number,state}:" "  7,merged" ; exit 0 ;;
+    *" --head fm/task-x1/b2 "*)
+      printf '%s\n' "count: 1 (showing first 1)" "pull_requests[1]{number,state}:" "  8,merged" ; exit 0 ;;
+  esac
+  printf '%s\n' "count: 0 (showing first 0)" "pull_requests[]: []" ; exit 0
+fi
+exit 0
+SH
+  cat > "$case_dir/fakebin/gh" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = pr ] && [ "\${2:-}" = view ]; then
+  case " \$* " in
+    *" 7 "*|*"/pull/7 "*) printf '%s\t%s\t%s\n' 'MERGED' '$b1_head' 'fm/task-x1/b1' ; exit 0 ;;
+    *" 8 "*|*"/pull/8 "*) printf '%s\t%s\t%s\n' 'MERGED' '$b2_head' 'fm/task-x1/b2' ; exit 0 ;;
+  esac
+fi
+echo "error: pull request not found" >&2
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/gh-axi" "$case_dir/fakebin/gh"
 }
 
 # Override gh-axi so every call fails, simulating an API/network error.
@@ -490,6 +524,41 @@ test_campaign_all_batches_landed_allows_and_prunes_refs() {
   git -C "$case_dir/project" show-ref --verify --quiet refs/heads/fm/task-x1/b2 \
     && fail "campaign-batches-landed: teardown left batch branch fm/task-x1/b2 behind"
   pass "campaign teardown with all batches landed proceeds and prunes every fm/<id>/* ref"
+}
+
+test_campaign_earlier_batch_verified_against_own_pr_allows() {
+  local case_dir rc launch b1_head b2_head
+  case_dir=$(make_case campaign-per-branch-pr)
+  write_meta "$case_dir" no-mistakes campaign
+  detach_wt_as_campaign_base "$case_dir"
+  launch=$(git -C "$case_dir/wt" rev-parse HEAD)
+  # Batch 1: merged via its own PR 7, but the content check is inconclusive
+  # because origin/main later rewrote batch1.txt to conflicting content - the
+  # squash replay of b1 no longer merges cleanly. Only b1's own PR proves it
+  # landed.
+  add_campaign_batch_branch "$case_dir" fm/task-x1/b1 "$launch" batch1.txt one
+  b1_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  land_on_origin_main "$case_dir" batch1.txt one-rewritten-later
+  # Batch 2: merged via PR 8, which is the PR recorded in the task's pr= line
+  # (fm-pr-check only ever records the LAST batch PR).
+  add_campaign_batch_branch "$case_dir" fm/task-x1/b2 "$launch" batch2.txt two
+  b2_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  git -C "$case_dir/wt" checkout -q --detach "$launch"
+  printf '%s\n' 'pr=https://github.com/example/repo/pull/8' >> "$case_dir/state/task-x1.meta"
+  add_gh_prs_merged_per_batch_branch "$case_dir" "$b1_head" "$b2_head"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "campaign-per-branch-pr: teardown should verify b1 against its own merged PR, not the recorded last-batch PR"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "campaign-per-branch-pr: teardown printed a REFUSED line"
+  git -C "$case_dir/project" show-ref --verify --quiet refs/heads/fm/task-x1/b1 \
+    && fail "campaign-per-branch-pr: teardown left batch branch fm/task-x1/b1 behind"
+  git -C "$case_dir/project" show-ref --verify --quiet refs/heads/fm/task-x1/b2 \
+    && fail "campaign-per-branch-pr: teardown left batch branch fm/task-x1/b2 behind"
+  pass "campaign teardown verifies each batch branch against its own merged PR (per-branch lookup)"
 }
 
 test_local_only_campaign_unmerged_branch_refuses_when_head_detached() {
@@ -798,6 +867,7 @@ test_no_mistakes_truly_unpushed_refuses
 test_campaign_truly_unpushed_refuses
 test_campaign_unlanded_batch_branch_refuses_even_when_head_clean
 test_campaign_all_batches_landed_allows_and_prunes_refs
+test_campaign_earlier_batch_verified_against_own_pr_allows
 test_local_only_campaign_unmerged_branch_refuses_when_head_detached
 test_local_only_force_overrides_unpushed
 test_squash_merged_branch_deleted_allows

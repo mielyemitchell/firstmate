@@ -12,12 +12,15 @@
 # already present in the up-to-date default branch. This recognizes the common
 # squash-merge-then-delete-branch flow, where the branch's own commits live nowhere
 # on a remote yet the change is fully in main.
-# The PR itself is resolved from the task's recorded pr= when present, or - when
-# no pr= was ever recorded (e.g. a yolo-authorized merge on a repo with no PR CI,
-# where the usual "checks green" fm-pr-check.sh trigger never fires) - by looking
-# up a merged PR whose head branch matches the worktree's branch, fetching its head
-# via refs/pull/<n>/head when the branch itself was deleted. So a missing pr= never
-# by itself causes a false refusal of landed work.
+# The PR itself is resolved from the task's recorded pr= when present AND its head
+# branch matches the branch being verified, or otherwise - including when no pr=
+# was ever recorded (e.g. a yolo-authorized merge on a repo with no PR CI, where
+# the usual "checks green" fm-pr-check.sh trigger never fires), and for campaign
+# batch branches whose own PR is not the last-recorded one - by looking up a
+# merged PR whose head branch matches that branch, fetching its head via
+# refs/pull/<n>/head when the branch itself was deleted. So a missing pr= never by
+# itself causes a false refusal of landed work, and each campaign branch is
+# verified against its own PR rather than the task's last-recorded PR.
 # A gh lookup error falls back to the content check; if that is also inconclusive,
 # teardown refuses rather than risk discarding unlanded work.
 # Uncommitted changes are never landed.
@@ -213,23 +216,56 @@ $unpushed
 EOF
 }
 
-# Is the worktree's PR merged for local work contained in that PR? Resolves the
-# PR from the recorded pr= URL first, then from the branch name, and asks GitHub
-# for both the PR state and head. Returns non-zero when the PR is not merged, the
-# current work is not contained in the PR head, no PR is found, or any gh error
-# occurs - the caller then falls back to the content check.
+# Query one PR's state, head oid, and head branch name via gh. Echoes
+# "state<TAB>head<TAB>headref" (headref may be empty when gh does not report it,
+# e.g. older gh or a mock without headRefName). Returns non-zero on any gh error
+# or an unparseable response.
+pr_view_fields() {
+  local target=$1 view state rest head headref
+  [ -n "$target" ] || return 1
+  view=$(cd "$WT" && gh pr view "$target" --json state,headRefOid,headRefName -q '.state + "\t" + .headRefOid + "\t" + .headRefName' 2>/dev/null) || return 1
+  state=${view%%$'\t'*}
+  rest=${view#*$'\t'}
+  [ "$rest" != "$view" ] || return 1
+  if [ "${rest#*$'\t'}" != "$rest" ]; then
+    head=${rest%%$'\t'*}
+    headref=${rest#*$'\t'}
+  else
+    head=$rest
+    headref=
+  fi
+  printf '%s\t%s\t%s' "$state" "$head" "$headref"
+}
+
+# Is the branch's PR merged with the local work contained in that PR? Uses the
+# recorded pr= URL only when its head branch matches (or cannot be disproven to
+# match) the branch being verified; otherwise discovers that branch's own PR by
+# name. Campaigns record only the LAST batch PR in pr=, so earlier batch branches
+# must be verified against their own PRs, never the recorded one. Returns
+# non-zero when the PR is not merged, the current work is not contained in the
+# PR head, no PR is found, or any gh error occurs - the caller then falls back
+# to the content check.
 pr_is_merged() {
-  local branch=$1 tip=${2:-HEAD} target view state head current
+  local branch=$1 tip=${2:-HEAD} target view state head headref rest current
+  view=
+  target=
   if [ -n "$PR_URL" ]; then
     target=$PR_URL
-  else
-    target=$(pr_number_from_branch "$branch") || return 1
+    view=$(pr_view_fields "$target") || view=
+    if [ -n "$view" ] && [ "$branch" != HEAD ]; then
+      headref=${view##*$'\t'}
+      if [ -n "$headref" ] && [ "$headref" != "$branch" ]; then
+        view=
+      fi
+    fi
   fi
-  [ -n "$target" ] || return 1
-  view=$(cd "$WT" && gh pr view "$target" --json state,headRefOid -q '.state + "\t" + .headRefOid' 2>/dev/null) || return 1
+  if [ -z "$view" ]; then
+    target=$(pr_number_from_branch "$branch") || return 1
+    view=$(pr_view_fields "$target") || return 1
+  fi
   state=${view%%$'\t'*}
-  head=${view#*$'\t'}
-  [ "$state" != "$view" ] || return 1
+  rest=${view#*$'\t'}
+  head=${rest%%$'\t'*}
   case "$state" in
     MERGED|merged) ;;
     *) return 1 ;;
