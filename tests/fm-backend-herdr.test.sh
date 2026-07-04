@@ -281,6 +281,22 @@ test_cli_helper_sets_env_and_appends_trailing_session_flag() {
   pass "fm_backend_herdr_cli: sets HERDR_SESSION AND appends a trailing --session flag on every call"
 }
 
+test_target_exists_uses_session_scoped_herdr_cli() {
+  local dir log resp fb
+  dir="$TMP_ROOT/target-exists"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/fm-backend.sh"; fm_backend_target_exists herdr fmtest:w1:p2' "$ROOT"
+  expect_code 0 $? "fm_backend_target_exists should succeed for a fake live herdr pane"
+  assert_contains "$(cat "$log")" "HERDR_SESSION=fmtest"$'\x1f''pane'$'\x1f''get'$'\x1f''w1:p2' \
+    "target_exists did not query the requested herdr pane"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''get'$'\x1f''w1:p2'$'\x1f''--session'$'\x1f''fmtest' \
+    "target_exists did not route the herdr pane check through an explicit --session flag"
+  assert_not_contains "$(cat "$log")" $'\x1f''server' \
+    "target_exists must remain a passive liveness read and not start a herdr server"
+  pass "fm_backend_target_exists: herdr liveness checks use explicit session targeting without autostart"
+}
+
 # --- container_ensure / create_task ------------------------------------------
 
 test_container_ensure_starts_server_and_workspace() {
@@ -1284,6 +1300,7 @@ test_workspace_label_secondmate_marker_trims_whitespace
 test_workspace_label_empty_marker_falls_back_to_primary
 test_workspace_label_different_secondmates_get_different_labels
 test_cli_helper_sets_env_and_appends_trailing_session_flag
+test_target_exists_uses_session_scoped_herdr_cli
 test_container_ensure_starts_server_and_workspace
 test_container_ensure_reuses_existing_workspace
 test_container_ensure_creates_with_no_focus_flag
