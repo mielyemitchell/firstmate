@@ -180,14 +180,18 @@ if [ "$MODE" = no-mistakes ]; then
 fi
 case "$MODE" in
   local-only)
+    CAMPAIGN_BRANCH_SETUP="2. Do not attempt to check out the default branch. The pooled clone holds it, so this worktree starts detached by design. Create the fixed campaign branch directly from the launch commit with \`git switch -c fm/$ID\`; when the execution skill preflight expects a named default branch, the current detached base commit stands in for it. Do not create slice or batch branches."
     CAMPAIGN_BATCH_STEP="6. When the batch is ready, leave it committed on \`fm/$ID\`. Do not push, do not open a PR, and do not merge.
 7. Update roadmap state only as required by the execution artifact after the local batch state changes."
+    CAMPAIGN_EXECUTION_OVERRIDE="This campaign contract overrides any normal branch, PR, or landing behavior inside the execution skill. For \`local-only\` projects, stay on the fixed \`fm/$ID\` task branch for the whole campaign. If the execution skill would create another branch, push, open a PR, run PR shipping, run \`land-pr\`, call a merge helper, or merge directly, do not do that step. Stop with \`done: ready in branch fm/$ID\` so firstmate can run \`bin/fm-merge-local.sh\` after review."
     CAMPAIGN_RULE1="1. Never push to any remote, never open a PR, and never merge. Work only on \`fm/$ID\`; firstmate handles review and local merge."
     CAMPAIGN_MERGE_AUTHORITY="For \`local-only\` projects, stop at \"ready in branch\" for each batch and append \`done: ready in branch fm/$ID\`. Wait for firstmate to review, merge locally with \`bin/fm-merge-local.sh\`, and send the continuation instruction. If \`yolo=$YOLO\` is \`on\`, firstmate may approve that local merge without the captain's word, but you still never merge."
     ;;
   *)
+    CAMPAIGN_BRANCH_SETUP="2. Do not attempt to check out the default branch. The pooled clone holds it, so this worktree starts detached by design. Create slice or batch branches directly from the launch commit with \`git switch -c <branch>\`; when the execution skill preflight expects a named default branch, the current detached base commit stands in for it."
     CAMPAIGN_BATCH_STEP="6. Open or update the batch PR when the batch is ready.
 7. Run roadmap-tick after the batch PR state changes as required by the execution artifact."
+    CAMPAIGN_EXECUTION_OVERRIDE="This campaign contract overrides any normal landing behavior inside the execution skill. The execution skill may help open or update the batch PR, but if it would run \`land-pr\`, call \`bin/fm-pr-merge.sh\`, call \`gh-axi pr merge\`, merge directly, or treat \`yolo=$YOLO\` as permission for you to merge, do not do that step. Stop before landing at \`done: PR {url} checks green\` so firstmate can run \`bin/fm-pr-merge.sh\` after the captain's word or firstmate's yolo decision."
     CAMPAIGN_RULE1="1. Never push to the default branch. Never merge a PR."
     CAMPAIGN_MERGE_AUTHORITY="Stop at \"PR ready, checks green\" for each batch PR and append \`done: PR {url} checks green\`. Wait for firstmate to relay the captain's merge word or, when \`yolo=$YOLO\` is \`on\`, firstmate's yolo merge decision and continuation instruction. Firstmate performs every PR merge through \`bin/fm-pr-merge.sh\` so task metadata records the landed PR. Never merge a red PR."
     ;;
@@ -216,10 +220,12 @@ The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse
 If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append \`blocked: launched in primary checkout, not an isolated worktree\` to the status file and stop.
 
 1. Record the launch commit: \`git rev-parse HEAD\`. Treat this commit as the roadmap base.
-2. Do not attempt to check out the default branch. The pooled clone holds it, so this worktree starts detached by design. Create slice or batch branches directly from the launch commit with \`git switch -c <branch>\`; when the execution skill preflight expects a named default branch, the current detached base commit stands in for it.$NO_MISTAKES_SETUP
+$CAMPAIGN_BRANCH_SETUP$NO_MISTAKES_SETUP
 
 # Execution loop
 Drive the captain-provided execution skill in roadmap mode. Invoke \`/autopilot\`; if the harness needs plain language instead, ask it to run the captain-provided execution skill against the committed roadmap/spec in roadmap mode.
+
+$CAMPAIGN_EXECUTION_OVERRIDE
 
 Use this loop:
 1. Pick the next unchecked slice from the roadmap/spec.
