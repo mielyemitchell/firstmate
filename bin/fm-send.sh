@@ -162,14 +162,11 @@ fi
 # unknown and treated as non-codex (the safe default that keeps the fast path).
 # The target's BACKEND comes from selector meta, from matching an explicit target
 # back to recorded meta, or from strict explicit-target shape validation.
-case "$RAW_TARGET" in
-  fm-*)
-    if ! fm_backend_target_exists "$TARGET_BACKEND" "$T" "$EXPECTED_LABEL"; then
-      echo "error: resolved target '$RAW_TARGET' to '$T' via $TARGET_META, but backend endpoint is not live (tried $RESOLUTION_TRIED; backend=$TARGET_BACKEND)" >&2
-      exit 1
-    fi
-    ;;
-esac
+# Do not add a separate passive liveness preflight here. Active send paths own
+# backend readiness: herdr, for example, must route through its session-aware
+# target_ready path before sending, while zellij verifies pane labels in its
+# send implementation. A failed backend send is still surfaced below as a hard
+# error with the attempted resolution attached.
 
 if [ "${1:-}" = "--key" ]; then
   if ! fm_backend_send_key "$TARGET_BACKEND" "$T" "$2" "$EXPECTED_LABEL"; then
