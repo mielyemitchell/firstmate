@@ -699,6 +699,22 @@ test_scout_skips_run_lookup() {
   pass "scout skips the run lookup"
 }
 
+# Campaigns are ship-like for validation: they keep one long-lived worktree, but
+# their batch PR still runs through no-mistakes when the project mode requires it.
+test_campaign_uses_run_lookup() {
+  reset_fakes
+  local d; d=$(new_case campaign)
+  make_repo_on_branch "$d/wt" fm/campaign-j
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/campaign-j.meta" "window=fm:fm-campaign-j" "worktree=$d/wt" "kind=campaign"
+  FM_FAKE_AXI_STATUS="$(run_running fm/campaign-j)"
+  FM_FAKE_BUSY=0
+  local out; out=$(run_crew_state "$d" campaign-j)
+  assert_contains "$out" "state: working" "campaign active run -> working"
+  assert_contains "$out" "source: run-step" "campaign active run -> run-step source"
+  pass "campaign uses the ship-like no-mistakes run lookup"
+}
+
 # (j) torn-down worktree and missing meta are graceful (unknown/none, exit 0)
 test_torn_down_worktree() {
   reset_fakes
@@ -800,6 +816,7 @@ test_dead_window_still_reports_terminal_run_step
 test_dead_window_still_reports_active_run_step
 test_no_timeout_uses_perl_bound
 test_scout_skips_run_lookup
+test_campaign_uses_run_lookup
 test_torn_down_worktree
 test_missing_meta
 test_provably_working_via_runs_list_fallback

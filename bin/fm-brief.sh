@@ -6,10 +6,13 @@
 # description, acceptance criteria, and context, and may adjust other sections
 # when the task genuinely deviates (e.g. working an existing external PR instead
 # of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> [--scout]
+# Usage: fm-brief.sh <task-id> <repo-name> [--scout|--campaign]
 #        fm-brief.sh <task-id> --secondmate <project>...
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
+#   --campaign writes the campaign contract instead: one long-lived crewmate
+#   drives a committed roadmap or upstream spec in one persistent worktree.
+#   The worktree is protected like a ship task; teardown waits for roadmap close.
 #   --secondmate writes a persistent secondmate charter. The project list
 #   is cloned into the secondmate home, while the natural-language scope
 #   tells the main firstmate when to route work there; routine churn stays in its own home;
@@ -43,6 +46,7 @@ POS=()
 for a in "$@"; do
   case "$a" in
     --scout) KIND=scout ;;
+    --campaign) KIND=campaign ;;
     --secondmate) KIND=secondmate ;;
     *) POS+=("$a") ;;
   esac
@@ -162,6 +166,94 @@ When the report is complete, append \`done: {one-line conclusion}\` to the statu
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF
 echo "scaffolded: $BRIEF (scout; replace {TASK})"
+exit 0
+fi
+
+if [ "$KIND" = campaign ]; then
+read -r MODE YOLO <<EOF
+$("$FM_ROOT/bin/fm-project-mode.sh" "$REPO")
+EOF
+NO_MISTAKES_SETUP=
+if [ "$MODE" = no-mistakes ]; then
+  NO_MISTAKES_SETUP="
+3. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`."
+fi
+cat > "$BRIEF" <<EOF
+You are a campaign crewmate: an autonomous long-lived worker agent managed by firstmate. Work on your own; do not wait for a human.
+
+# Task
+{TASK}
+
+# Campaign contract
+You work in ONE persistent worktree for the whole roadmap. Do not ask for teardown, respawn, or a fresh worktree between slices or batch PRs.
+Teardown happens only after the roadmap is closed and firstmate confirms the final campaign work has landed.
+
+The execution artifact is already finished before you start: either a committed roadmap at \`docs/plans/<feature>.md\` with \`- [ ]\` slices and optional \`[gate]\` / \`[risk:high]\` markers, or a single upstream-produced spec.
+Planning is out of scope. If the artifact is missing, unfinished, or asks you to plan the feature, append \`blocked: missing finished campaign artifact\` to the status file and stop.
+
+Project delivery mode: \`$MODE\`
+Project yolo flag: \`$YOLO\`
+
+# Setup
+You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default-branch commit.
+
+**Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from.
+The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse --git-common-dir\` can help inspect the repo, but they do not prove you are outside the primary checkout.
+If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append \`blocked: launched in primary checkout, not an isolated worktree\` to the status file and stop.
+
+1. Record the launch commit: \`git rev-parse HEAD\`. Treat this commit as the roadmap base.
+2. Do not attempt to check out the default branch. The pooled clone holds it, so this worktree starts detached by design. Create slice or batch branches directly from the launch commit with \`git switch -c <branch>\`; when the execution skill preflight expects a named default branch, the current detached base commit stands in for it.$NO_MISTAKES_SETUP
+
+# Execution loop
+Drive the captain-provided execution skill in roadmap mode. Invoke \`/autopilot\`; if the harness needs plain language instead, ask it to run the captain-provided execution skill against the committed roadmap/spec in roadmap mode.
+
+Use this loop:
+1. Pick the next unchecked slice from the roadmap/spec.
+2. Implement only that slice.
+3. Verify the slice.
+4. Review the slice.
+5. Commit it with a message containing \`[S<N>]\`, where \`<N>\` is the slice number.
+6. Open or update the batch PR when the batch is ready.
+7. Run roadmap-tick after the batch PR state changes as required by the execution artifact.
+
+For \`no-mistakes\` projects, keep the execution skill's normal inner verify/review loop per slice, then run the no-mistakes pipeline as the final batch-PR gate before reporting the PR ready. The no-mistakes evidence trail is part of the fleet contract.
+
+# Escalation mapping
+Every stop raised by the execution skill maps to the status file:
+
+- \`[gate]\` slice: append \`needs-decision: [gate] <exact stop reason + options>\`, then wait.
+- \`[risk:high]\` slice: append \`needs-decision: [risk:high] <exact stop reason + options>\`, then wait.
+- Off-spec or off-blueprint UI stop: append \`needs-decision: off-spec UI <exact stop reason + options>\`, then wait.
+- Structured clarification question: append \`needs-decision: clarification <exact question + options>\`, then wait.
+- Visual approval: append \`needs-decision: visual approval <artifact/link + options>\`, then wait.
+
+Never push past a stop. Firstmate relays the decision to the captain and replies with the answer.
+
+# Rules
+1. Never push to the default branch. Never merge a PR unless this project's yolo flag is \`on\` and the execution skill's own readiness gates say the PR may land.
+2. Stay inside this worktree; modify nothing outside it.
+3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+4. Report status by appending one line:
+   \`echo "{state}: {one short line}" >> $STATUS_FILE\`
+   States: working, needs-decision, blocked, done, failed.
+   Each append wakes firstmate, so report sparingly: setup complete, each stop that needs a decision, batch PR ready, roadmap close, blocked, or failed.
+5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
+6. If a decision belongs to a human, append \`needs-decision: {exact stop reason + options}\` and stop. Firstmate will reply with the decision.
+
+# Merge authority
+If \`yolo=$YOLO\` is \`on\`, the execution skill's land-pr close may merge through its own readiness gates.
+If \`yolo=$YOLO\` is \`off\`, stop at "PR ready, checks green" for each batch PR and append \`done: PR {url} checks green\`. Wait for firstmate to relay the captain's merge word and continuation instruction.
+Never merge a red PR.
+
+# Project memory
+If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this campaign produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.
+If this campaign produced durable project-intrinsic knowledge, record it in \`AGENTS.md\` as part of your change.
+
+# Definition of done
+The campaign is complete only when the roadmap/spec is fully closed, every batch PR has passed its required gates, and the final work has landed or is waiting at the mode-specific merge stop above.
+On final roadmap close, append \`done: campaign complete {PR url or summary}\` to the status file and stop. Firstmate tears down this worktree only after it confirms the campaign work has landed.
+EOF
+echo "scaffolded: $BRIEF (campaign; replace {TASK})"
 exit 0
 fi
 

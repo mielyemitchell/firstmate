@@ -155,6 +155,39 @@ test_active_dispatch_profile_requires_explicit_harness_for_scout() {
   pass "active crew-dispatch profile requires an explicit harness for scout spawns"
 }
 
+test_active_dispatch_profile_requires_explicit_harness_for_campaign() {
+  local rec id out status
+  id=profile-required-campaign-z17
+  rec=$(make_spawn_case profile-required-campaign claude "$id")
+  read_case_record "$rec"
+  enable_dispatch_profile "$HOME_DIR"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --campaign)
+  status=$?
+  expect_code 1 "$status" "campaign spawn without explicit harness should fail when dispatch profiles are active"
+  assert_contains "$out" "config/crew-dispatch.json is active - pass an explicit harness resolved from the dispatch rules" \
+    "campaign refusal did not explain the dispatch-profile backstop"
+  assert_absent "$HOME_DIR/state/$id.meta" "campaign refusal should happen before meta is written"
+  pass "active crew-dispatch profile requires an explicit harness for campaign spawns"
+}
+
+test_campaign_spawn_records_campaign_kind() {
+  local rec id out status
+  id=profile-campaign-z18
+  rec=$(make_spawn_case profile-campaign codex "$id")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --campaign)
+  status=$?
+  expect_code 0 "$status" "campaign spawn should succeed through the ordinary worktree path"
+  assert_contains "$out" "spawned $id harness=codex kind=campaign" "spawn did not report kind=campaign"
+  assert_grep "kind=campaign" "$HOME_DIR/state/$id.meta" "campaign meta missing kind=campaign"
+  assert_grep "mode=no-mistakes" "$HOME_DIR/state/$id.meta" "campaign meta missing project delivery mode"
+  assert_grep "yolo=off" "$HOME_DIR/state/$id.meta" "campaign meta missing project yolo flag"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex default default
+  pass "campaign spawn records kind=campaign while preserving normal crewmate metadata"
+}
+
 test_active_dispatch_profile_allows_explicit_harness() {
   local rec id out status launch
   id=profile-explicit-z13
@@ -367,6 +400,8 @@ test_active_dispatch_profile_does_not_block_secondmate_launch() {
 test_no_profile_keeps_claude_launch_unchanged
 test_active_dispatch_profile_requires_explicit_harness_for_ship
 test_active_dispatch_profile_requires_explicit_harness_for_scout
+test_active_dispatch_profile_requires_explicit_harness_for_campaign
+test_campaign_spawn_records_campaign_kind
 test_active_dispatch_profile_allows_explicit_harness
 test_active_dispatch_profile_allows_positional_harness
 test_active_dispatch_profile_allows_raw_launch_command

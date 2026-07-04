@@ -23,7 +23,7 @@
 # records kind=secondmate, the text is prefixed with the from-firstmate marker
 # (bin/fm-marker-lib.sh) so the secondmate routes its reply via its status file
 # or a status-pointed doc instead of stranding it in chat the main firstmate
-# never reads. A crewmate/scout target, an explicit backend-target escape-hatch
+# never reads. A ship/scout/campaign target, an explicit backend-target escape-hatch
 # target, and the --key path are never marked - their behavior is unchanged.
 # After a successful text submit fm-send pauses FM_SEND_SETTLE seconds (default 1,
 # 0 disables) before returning: a cleared composer only proves the text was
@@ -53,7 +53,7 @@ shift
 # resolved through this home's meta and recording kind=secondmate, is marked: the
 # secondmate then routes its reply via the status path (see fm-marker-lib.sh).
 # An explicit backend target (the escape hatch for endpoints outside this home)
-# and any crewmate/scout target are left unmarked, and so is the --key path.
+# and any ship/scout/campaign target are left unmarked, and so is the --key path.
 MARK_PREFIX=""
 case "$RAW_TARGET" in
   fm-*)

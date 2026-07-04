@@ -34,6 +34,7 @@
 #   (o) fm-pr-check rerun after HEAD moved                      -> no stale pr_head
 #   (p) fm-pr-check when local HEAD lags                        -> record remote PR head
 #   (q) no-mistakes + NO pr= recorded, PR discovered by branch  -> ALLOW  (yolo/no-CI merge)
+#   (r) campaign + unpushed, no PR, content not in default      -> REFUSE (ship-like protection)
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -396,6 +397,25 @@ test_no_mistakes_truly_unpushed_refuses() {
   pass "no-mistakes worktree with genuinely unlanded work is refused (safety preserved)"
 }
 
+test_campaign_truly_unpushed_refuses() {
+  local case_dir rc
+  case_dir=$(make_case campaign-unpushed)
+  write_meta "$case_dir" no-mistakes campaign
+  # Campaigns are long-lived, but they are not scratch. Until their work lands,
+  # teardown must protect them exactly like ship tasks.
+  wt_commit_file "$case_dir" feature.txt hello "campaign work"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "campaign-unpushed: teardown should refuse"
+  grep -q REFUSED "$case_dir/stderr" || fail "campaign-unpushed: no REFUSED line in stderr"
+  grep -q "not landed" "$case_dir/stderr" || fail "campaign-unpushed: refusal did not cite unlanded work"
+  pass "campaign worktree with genuinely unlanded work is refused like ship work"
+}
+
 test_squash_merged_branch_deleted_allows() {
   local case_dir rc pr_head
   case_dir=$(make_case squash-merged)
@@ -678,6 +698,7 @@ test_local_only_truly_unpushed_refuses
 test_local_only_merged_to_local_main_allows
 test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses
+test_campaign_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
 test_squash_merged_branch_deleted_allows
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head
