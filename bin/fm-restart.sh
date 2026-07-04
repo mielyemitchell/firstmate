@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+# Refresh a persistent secondmate lane by asking it to stow and exit, waiting for
+# the harness process to leave, then respawning it through fm-spawn bookkeeping.
+# Usage: fm-restart.sh [--force] <secondmate-id>
+set -eu
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+
+# shellcheck source=bin/fm-backend.sh
+. "$SCRIPT_DIR/fm-backend.sh"
+
+"$FM_ROOT/bin/fm-guard.sh" || true
+
+usage() {
+  echo "usage: fm-restart.sh [--force] <secondmate-id>" >&2
+  exit 2
+}
+
+FORCE=0
+ID=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --force) FORCE=1 ;;
+    -h|--help) usage ;;
+    --*) echo "error: unknown option $1" >&2; usage ;;
+    *)
+      [ -z "$ID" ] || usage
+      ID=$1
+      ;;
+  esac
+  shift
+done
+[ -n "$ID" ] || usage
+
+TIMEOUT=${FM_RESTART_TIMEOUT:-120}
+FORCE_TIMEOUT=${FM_RESTART_FORCE_TIMEOUT:-20}
+POLL_INTERVAL=${FM_RESTART_POLL_INTERVAL:-1}
+case "$TIMEOUT" in ''|*[!0-9]*) echo "error: FM_RESTART_TIMEOUT must be whole seconds" >&2; exit 2 ;; esac
+case "$FORCE_TIMEOUT" in ''|*[!0-9]*) echo "error: FM_RESTART_FORCE_TIMEOUT must be whole seconds" >&2; exit 2 ;; esac
+
+META="$STATE/$ID.meta"
+[ -f "$META" ] || { echo "error: no meta for $ID at $META" >&2; exit 1; }
+
+KIND=$(fm_meta_get "$META" kind)
+[ "$KIND" = secondmate ] || { echo "error: $ID is kind=${KIND:-ship}; only secondmate lanes are restarted (crewmates are torn down)" >&2; exit 1; }
+
+T=$(fm_meta_get "$META" window)
+[ -n "$T" ] || { echo "error: no window= recorded in $META" >&2; exit 1; }
+BACKEND=$(fm_backend_of_meta "$META")
+HARNESS=$(fm_meta_get "$META" harness)
+[ -n "$HARNESS" ] || HARNESS=unknown
+EXPECTED_LABEL="fm-$ID"
+
+fm_backend_validate_spawn "$BACKEND" >/dev/null || exit 1
+fm_backend_source "$BACKEND" || exit 1
+case "$BACKEND" in
+  tmux|herdr) ;;
+  *) echo "error: fm-restart supports secondmate lanes on tmux/herdr only for now; $ID uses backend=$BACKEND" >&2; exit 1 ;;
+esac
+
+harness_command() {
+  local h=$1 cmd
+  cmd=${h%% *}
+  cmd=${cmd##*/}
+  printf '%s' "$cmd"
+}
+
+HARNESS_CMD=$(harness_command "$HARNESS")
+
+target_exists() {
+  fm_backend_target_exists "$BACKEND" "$T" "$EXPECTED_LABEL" >/dev/null 2>&1
+}
+
+harness_running() {
+  local processes cmd
+  cmd=$HARNESS_CMD
+  [ -n "$cmd" ] && [ "$cmd" != unknown ] || return 1
+  processes=$(fm_backend_foreground_process "$BACKEND" "$T" "$EXPECTED_LABEL" 2>/dev/null || true)
+  [ -n "$processes" ] || return 1
+  printf '%s\n' "$processes" | awk -v want="$cmd" '
+    {
+      for (i = 1; i <= NF; i++) {
+        token = $i
+        sub(/^.*\//, "", token)
+        if (token == want) found = 1
+      }
+    }
+    END { exit found ? 0 : 1 }
+  '
+}
+
+wait_for_exit() {  # <timeout-seconds>
+  local timeout=$1 deadline now
+  deadline=$(($(date +%s) + timeout))
+  while :; do
+    ! target_exists && return 0
+    ! harness_running && return 0
+    now=$(date +%s)
+    [ "$now" -lt "$deadline" ] || return 1
+    sleep "$POLL_INTERVAL"
+  done
+}
+
+send_key_best_effort() {
+  "$SCRIPT_DIR/fm-send.sh" "$T" --key "$1" >/dev/null 2>&1 || true
+}
+
+send_text_best_effort() {
+  "$SCRIPT_DIR/fm-send.sh" "$T" "$1" >/dev/null 2>&1 || true
+}
+
+force_exit_sequence() {
+  case "$HARNESS_CMD" in
+    claude)
+      send_key_best_effort Escape
+      sleep 1
+      send_text_best_effort /exit
+      ;;
+    codex)
+      send_key_best_effort Escape
+      sleep 1
+      send_text_best_effort /quit
+      ;;
+    opencode)
+      send_key_best_effort Escape
+      sleep 0.5
+      send_key_best_effort Escape
+      sleep 1
+      send_text_best_effort /exit
+      ;;
+    pi)
+      send_key_best_effort Escape
+      sleep 1
+      send_text_best_effort /quit
+      ;;
+    grok)
+      send_key_best_effort C-c
+      sleep 1
+      send_key_best_effort C-q
+      sleep 0.2
+      send_key_best_effort C-q
+      ;;
+    *)
+      send_key_best_effort C-c
+      ;;
+  esac
+}
+
+respawn() {
+  "$SCRIPT_DIR/fm-spawn.sh" "$ID" --backend "$BACKEND" --secondmate
+}
+
+cleanup_and_respawn() {
+  local archived_label out rc
+  case "$BACKEND" in
+    herdr)
+      if target_exists; then
+        archived_label="old-$EXPECTED_LABEL-$(date +%s)"
+        echo "restart: renaming old herdr tab to $archived_label"
+        fm_backend_relabel_task "$BACKEND" "$T" "$archived_label" "$EXPECTED_LABEL" \
+          || { echo "error: could not rename old herdr tab for $ID; refusing to spawn a duplicate" >&2; exit 1; }
+        if out=$(respawn 2>&1); then
+          printf '%s\n' "$out"
+        else
+          rc=$?
+          fm_backend_relabel_task "$BACKEND" "$T" "$EXPECTED_LABEL" "$archived_label" >/dev/null 2>&1 || true
+          printf '%s\n' "$out" >&2
+          echo "error: respawn failed; old herdr tab was left in place" >&2
+          exit "$rc"
+        fi
+        fm_backend_kill "$BACKEND" "$T" >/dev/null 2>&1 || true
+      else
+        respawn
+      fi
+      ;;
+    *)
+      if target_exists; then
+        fm_backend_kill "$BACKEND" "$T" >/dev/null 2>&1 || true
+      fi
+      respawn
+      ;;
+  esac
+}
+
+if target_exists && harness_running; then
+  echo "restart: asking $ID to stow and exit (timeout ${TIMEOUT}s)"
+  "$SCRIPT_DIR/fm-send.sh" "fm-$ID" "Stow any lane-local durable context if needed, then exit this agent process now. Do not start new work; firstmate will respawn this lane." >/dev/null
+  if ! wait_for_exit "$TIMEOUT"; then
+    if [ "$FORCE" -ne 1 ]; then
+      echo "error: $ID did not exit within ${TIMEOUT}s; rerun with --force to interrupt and restart it" >&2
+      exit 1
+    fi
+    echo "restart: $ID did not exit within ${TIMEOUT}s; forcing harness exit"
+    force_exit_sequence
+    if ! wait_for_exit "$FORCE_TIMEOUT"; then
+      echo "restart: force exit did not stop $ID within ${FORCE_TIMEOUT}s; closing old endpoint during cleanup" >&2
+    fi
+  fi
+else
+  if target_exists; then
+    echo "restart: $ID endpoint is live but no $HARNESS_CMD foreground process is running; respawning"
+  else
+    echo "restart: $ID endpoint is already dead; respawning"
+  fi
+fi
+
+cleanup_and_respawn
+echo "restart: $ID refreshed"

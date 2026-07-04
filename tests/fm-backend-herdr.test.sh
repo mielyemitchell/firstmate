@@ -454,8 +454,9 @@ test_normalize_key() {
     [ "$(fm_backend_herdr_normalize_key Escape)" = escape ] || exit 1
     [ "$(fm_backend_herdr_normalize_key C-c)" = ctrl+c ] || exit 1
     [ "$(fm_backend_herdr_normalize_key ctrl+c)" = ctrl+c ] || exit 1
+    [ "$(fm_backend_herdr_normalize_key C-q)" = ctrl+q ] || exit 1
   ) || fail "fm_backend_herdr_normalize_key did not map firstmate's key vocabulary to herdr's verified names"
-  pass "fm_backend_herdr_normalize_key: Enter/Escape/C-c map to herdr's verified enter/escape/ctrl+c"
+  pass "fm_backend_herdr_normalize_key: Enter/Escape/C-c/C-q map to herdr's verified enter/escape/ctrl+c/ctrl+q"
 }
 
 # --- capture / send_key / kill / current_path --------------------------------

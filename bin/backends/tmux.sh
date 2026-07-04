@@ -106,3 +106,13 @@ fm_backend_tmux_send_literal() {  # <target> <text>
 fm_backend_tmux_kill() {  # <target>
   tmux kill-window -t "$1" 2>/dev/null || true
 }
+
+# fm_backend_tmux_foreground_process: expose tmux's structured current command
+# for callers that need to know whether the launched harness is still running.
+fm_backend_tmux_foreground_process() {  # <target>
+  tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null || true
+}
+
+fm_backend_tmux_relabel_task() {  # <target> <new-label>
+  tmux rename-window -t "$1" "$2"
+}

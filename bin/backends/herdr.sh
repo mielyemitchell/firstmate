@@ -411,15 +411,16 @@ fm_backend_herdr_send_literal() {  # <target> <text>
 }
 
 # fm_backend_herdr_normalize_key: map firstmate's key vocabulary (Enter,
-# Escape, C-c, as used by fm-send.sh --key and stuck-crewmate-recovery) onto
+# Escape, C-c, and C-q as used by fm-send.sh --key and recovery paths) onto
 # herdr's `pane send-keys` names. Verified empirically: enter, escape/esc, and
 # both ctrl+c/C-c all work (case-insensitive on herdr's side, but normalize
-# explicitly rather than relying on that).
+# explicitly rather than relying on that). ctrl+q is used by grok's quit flow.
 fm_backend_herdr_normalize_key() {  # <key>
   case "$1" in
     Enter|enter) printf 'enter' ;;
     Escape|escape|Esc|esc) printf 'escape' ;;
     C-c|c-c|ctrl+c|Ctrl+C) printf 'ctrl+c' ;;
+    C-q|c-q|ctrl+q|Ctrl+Q) printf 'ctrl+q' ;;
     *) printf '%s' "$1" ;;
   esac
 }
@@ -572,6 +573,34 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
 fm_backend_herdr_kill() {  # <target>
   fm_backend_herdr_target_ready "$1" || return 0
   fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane close "$FM_BACKEND_HERDR_PANE" >/dev/null 2>&1 || true
+}
+
+# fm_backend_herdr_foreground_process: read the real foreground process list
+# from herdr's process-info primitive. This deliberately excludes herdr's
+# persisted agent metadata because an exited agent can leave stale agent labels
+# behind while the foreground process has returned to a shell.
+fm_backend_herdr_foreground_process() {  # <target>
+  local out
+  fm_backend_herdr_target_ready "$1" || return 0
+  out=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane process-info --pane "$FM_BACKEND_HERDR_PANE" 2>/dev/null) || return 0
+  printf '%s' "$out" | jq -r '
+    .result.process_info.foreground_processes[]? |
+    [
+      (.argv0 // empty),
+      (.argv[0] // empty),
+      (.cmdline // empty),
+      ((.argv // []) | join(" "))
+    ] | .[] | select(. != "")
+  ' 2>/dev/null
+}
+
+fm_backend_herdr_relabel_task() {  # <target> <new-label>
+  local target=$1 new_label=$2 tab_id
+  fm_backend_herdr_target_ready "$target" || return 1
+  tab_id=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
+    | jq -r '.result.pane.tab_id // empty' 2>/dev/null)
+  [ -n "$tab_id" ] || { echo "error: could not resolve herdr tab id for $target" >&2; return 1; }
+  fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" tab rename "$tab_id" "$new_label" >/dev/null
 }
 
 # fm_backend_herdr_busy_state: semantic busy state from herdr's native
