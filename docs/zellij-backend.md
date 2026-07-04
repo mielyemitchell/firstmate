@@ -26,7 +26,7 @@ No first-run provisioning is needed beyond having `zellij` and `jq` on `PATH`; f
 
 Watching and attaching: firstmate uses one shared session (default name `firstmate`, overridable with `FM_ZELLIJ_SESSION`) with one tab per task, named `fm-<id>`.
 Attach to the selected `FM_ZELLIJ_SESSION` (or the default `firstmate` session) with `zellij attach <name>` to see every task, primary or secondmate, as a tab in that one tab bar.
-You do not need to attach for routine supervision: from an active firstmate session with `FM_HOME` exported, `bin/fm-peek.sh fm-<id>` reads a task's pane without attaching, and `bin/fm-send.sh fm-<id> "<text>"` steers it.
+You do not need to attach for routine supervision: from an active firstmate session, `bin/fm-peek.sh fm-<id>` reads a task's pane without attaching, and `FM_HOME=<this-firstmate-home> bin/fm-send.sh fm-<id> "<text>"` steers it unless `FM_HOME` is already set to the active firstmate home.
 
 Verify it works by spawning a trivial task with `--backend zellij` and confirming the task's meta records `backend=zellij` plus `zellij_session=`, `zellij_tab_id=`, and `zellij_pane_id=`; attaching to the session should show the new `fm-<id>` tab.
 
