@@ -89,7 +89,10 @@ target_exists_with_label() {
 harness_process_state() {
   local processes cmd
   cmd=$HARNESS_CMD
-  [ -n "$cmd" ] && [ "$cmd" != unknown ] || { printf 'unknown'; return 0; }
+  if [ -z "$cmd" ] || [ "$cmd" = unknown ]; then
+    printf 'unknown'
+    return 0
+  fi
   processes=$(fm_backend_foreground_process "$BACKEND" "$T" "$EXPECTED_LABEL" 2>/dev/null || true)
   [ -n "$processes" ] || { printf 'unknown'; return 0; }
   if printf '%s\n' "$processes" | awk -v want="$cmd" '
