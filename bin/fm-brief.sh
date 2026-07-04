@@ -180,10 +180,10 @@ if [ "$MODE" = no-mistakes ]; then
 fi
 case "$MODE" in
   local-only)
-    CAMPAIGN_BATCH_STEP="6. When the batch is ready, leave it committed on its branch. Do not push, do not open a PR, and do not merge.
+    CAMPAIGN_BATCH_STEP="6. When the batch is ready, leave it committed on \`fm/$ID\`. Do not push, do not open a PR, and do not merge.
 7. Update roadmap state only as required by the execution artifact after the local batch state changes."
-    CAMPAIGN_RULE1="1. Never push to any remote, never open a PR, and never merge. Stop at ready in branch; firstmate handles review and local merge."
-    CAMPAIGN_MERGE_AUTHORITY="For \`local-only\` projects, stop at \"ready in branch\" for each batch and append \`done: ready in branch {branch}\`. Wait for firstmate to review, merge locally with \`bin/fm-merge-local.sh\`, and send the continuation instruction. If \`yolo=$YOLO\` is \`on\`, firstmate may approve that local merge without the captain's word, but you still never merge."
+    CAMPAIGN_RULE1="1. Never push to any remote, never open a PR, and never merge. Work only on \`fm/$ID\`; firstmate handles review and local merge."
+    CAMPAIGN_MERGE_AUTHORITY="For \`local-only\` projects, stop at \"ready in branch\" for each batch and append \`done: ready in branch fm/$ID\`. Wait for firstmate to review, merge locally with \`bin/fm-merge-local.sh\`, and send the continuation instruction. If \`yolo=$YOLO\` is \`on\`, firstmate may approve that local merge without the captain's word, but you still never merge."
     ;;
   *)
     CAMPAIGN_BATCH_STEP="6. Open or update the batch PR when the batch is ready.
