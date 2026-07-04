@@ -310,7 +310,7 @@ exit 0
 SH
   chmod +x "$root/bin/fm-send.sh"
   write_lane_meta "$dir" secondmate tmux firstmate:fm-lane
-  FM_RESTART_STOW_TIMEOUT=0 out=$(run_restart "$dir" "$root" "$fb" lane 2>&1); status=$?
+  out=$(FM_RESTART_STOW_TIMEOUT=0 run_restart "$dir" "$root" "$fb" lane 2>&1); status=$?
   [ "$status" -ne 0 ] || fail "stow timeout should fail"
   assert_contains "$out" "did not confirm stow" "stow timeout did not explain missing status signal"
   assert_not_contains "$(cat "$dir/log")" "send:firstmate:fm-lane:/quit" "stow timeout must not send raw exit"
