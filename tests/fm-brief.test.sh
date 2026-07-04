@@ -99,11 +99,33 @@ test_campaign_brief_contract() {
   assert_grep "needs-decision: [risk:high]" "$brief" "campaign brief missing high-risk escalation mapping"
   assert_grep "no-mistakes pipeline as the final batch-PR gate" "$brief" "campaign brief missing no-mistakes final gate"
   assert_grep "done: PR {url} checks green" "$brief" "campaign brief missing non-yolo merge stop report"
+  assert_grep "Firstmate performs every PR merge through \`bin/fm-pr-merge.sh\`" "$brief" "campaign brief must reserve PR merge authority for firstmate"
+  assert_grep "firstmate's yolo merge decision" "$brief" "campaign brief must route yolo merge decisions through firstmate"
+  assert_no_grep "may merge through its own readiness gates" "$brief" "campaign brief delegated yolo merge authority to the crewmate"
   assert_grep "Teardown happens only after the roadmap is closed" "$brief" "campaign brief missing teardown timing"
   pass "fm-brief.sh: --campaign generates the roadmap-mode campaign contract"
+}
+
+test_campaign_local_only_brief_contract() {
+  local home id brief
+  home="$TMP_ROOT/campaign-local-home"
+  write_registry "$home"
+  id="brief-campaign-local-c2"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj --campaign >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "local-only campaign brief was not scaffolded"
+  assert_grep "Project delivery mode: \`local-only\`" "$brief" "local-only campaign brief did not include project delivery mode"
+  assert_grep "Do not push, do not open a PR, and do not merge" "$brief" "local-only campaign brief allowed PR or merge delivery"
+  assert_grep "done: ready in branch {branch}" "$brief" "local-only campaign brief missing ready-in-branch stop"
+  assert_grep "firstmate handles review and local merge" "$brief" "local-only campaign brief missing firstmate local merge ownership"
+  assert_grep "bin/fm-merge-local.sh" "$brief" "local-only campaign brief missing local merge helper"
+  assert_no_grep "Open or update the batch PR" "$brief" "local-only campaign brief still asks for a batch PR"
+  pass "fm-brief.sh: local-only campaigns stop ready in branch"
 }
 
 test_script_parses
 test_ship_modes_generate_clean_briefs
 test_no_mistakes_dod_wording
 test_campaign_brief_contract
+test_campaign_local_only_brief_contract

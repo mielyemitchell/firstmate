@@ -178,6 +178,20 @@ if [ "$MODE" = no-mistakes ]; then
   NO_MISTAKES_SETUP="
 3. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`."
 fi
+case "$MODE" in
+  local-only)
+    CAMPAIGN_BATCH_STEP="6. When the batch is ready, leave it committed on its branch. Do not push, do not open a PR, and do not merge.
+7. Update roadmap state only as required by the execution artifact after the local batch state changes."
+    CAMPAIGN_RULE1="1. Never push to any remote, never open a PR, and never merge. Stop at ready in branch; firstmate handles review and local merge."
+    CAMPAIGN_MERGE_AUTHORITY="For \`local-only\` projects, stop at \"ready in branch\" for each batch and append \`done: ready in branch {branch}\`. Wait for firstmate to review, merge locally with \`bin/fm-merge-local.sh\`, and send the continuation instruction. If \`yolo=$YOLO\` is \`on\`, firstmate may approve that local merge without the captain's word, but you still never merge."
+    ;;
+  *)
+    CAMPAIGN_BATCH_STEP="6. Open or update the batch PR when the batch is ready.
+7. Run roadmap-tick after the batch PR state changes as required by the execution artifact."
+    CAMPAIGN_RULE1="1. Never push to the default branch. Never merge a PR."
+    CAMPAIGN_MERGE_AUTHORITY="Stop at \"PR ready, checks green\" for each batch PR and append \`done: PR {url} checks green\`. Wait for firstmate to relay the captain's merge word or, when \`yolo=$YOLO\` is \`on\`, firstmate's yolo merge decision and continuation instruction. Firstmate performs every PR merge through \`bin/fm-pr-merge.sh\` so task metadata records the landed PR. Never merge a red PR."
+    ;;
+esac
 cat > "$BRIEF" <<EOF
 You are a campaign crewmate: an autonomous long-lived worker agent managed by firstmate. Work on your own; do not wait for a human.
 
@@ -213,8 +227,7 @@ Use this loop:
 3. Verify the slice.
 4. Review the slice.
 5. Commit it with a message containing \`[S<N>]\`, where \`<N>\` is the slice number.
-6. Open or update the batch PR when the batch is ready.
-7. Run roadmap-tick after the batch PR state changes as required by the execution artifact.
+$CAMPAIGN_BATCH_STEP
 
 For \`no-mistakes\` projects, keep the execution skill's normal inner verify/review loop per slice, then run the no-mistakes pipeline as the final batch-PR gate before reporting the PR ready. The no-mistakes evidence trail is part of the fleet contract.
 
@@ -230,28 +243,26 @@ Every stop raised by the execution skill maps to the status file:
 Never push past a stop. Firstmate relays the decision to the captain and replies with the answer.
 
 # Rules
-1. Never push to the default branch. Never merge a PR unless this project's yolo flag is \`on\` and the execution skill's own readiness gates say the PR may land.
+$CAMPAIGN_RULE1
 2. Stay inside this worktree; modify nothing outside it.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
    States: working, needs-decision, blocked, done, failed.
-   Each append wakes firstmate, so report sparingly: setup complete, each stop that needs a decision, batch PR ready, roadmap close, blocked, or failed.
+   Each append wakes firstmate, so report sparingly: setup complete, each stop that needs a decision, batch ready, roadmap close, blocked, or failed.
 5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
 6. If a decision belongs to a human, append \`needs-decision: {exact stop reason + options}\` and stop. Firstmate will reply with the decision.
 
 # Merge authority
-If \`yolo=$YOLO\` is \`on\`, the execution skill's land-pr close may merge through its own readiness gates.
-If \`yolo=$YOLO\` is \`off\`, stop at "PR ready, checks green" for each batch PR and append \`done: PR {url} checks green\`. Wait for firstmate to relay the captain's merge word and continuation instruction.
-Never merge a red PR.
+$CAMPAIGN_MERGE_AUTHORITY
 
 # Project memory
 If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this campaign produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.
 If this campaign produced durable project-intrinsic knowledge, record it in \`AGENTS.md\` as part of your change.
 
 # Definition of done
-The campaign is complete only when the roadmap/spec is fully closed, every batch PR has passed its required gates, and the final work has landed or is waiting at the mode-specific merge stop above.
-On final roadmap close, append \`done: campaign complete {PR url or summary}\` to the status file and stop. Firstmate tears down this worktree only after it confirms the campaign work has landed.
+The campaign is complete only when the roadmap/spec is fully closed, every batch has passed its required gates, and the final work has landed or is waiting at the mode-specific merge stop above.
+On final roadmap close, append \`done: campaign complete {PR url, branch, or summary}\` to the status file and stop. Firstmate tears down this worktree only after it confirms the campaign work has landed.
 EOF
 echo "scaffolded: $BRIEF (campaign; replace {TASK})"
 exit 0
