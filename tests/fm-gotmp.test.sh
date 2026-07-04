@@ -129,7 +129,11 @@ test_teardown_removes_tasktmp_dir() {
   # Sanity: dir + contents exist before teardown.
   [ -d "$task_tmp/gotmp" ] || fail "precondition: gotmp missing before teardown"
   # Run the REAL teardown against the fake root.
-  bash "$fake/bin/fm-teardown.sh" "$id" >/dev/null 2>&1 \
+  # Neutralize any ambient FM_HOME/override so the real teardown resolves its
+  # state dir from the fake FM_ROOT (via BASH_SOURCE), as this test's design
+  # intends; an exported FM_HOME would otherwise redirect it to the live home.
+  env -u FM_HOME -u FM_ROOT_OVERRIDE -u FM_STATE_OVERRIDE -u FM_DATA_OVERRIDE \
+    -u FM_CONFIG_OVERRIDE bash "$fake/bin/fm-teardown.sh" "$id" >/dev/null 2>&1 \
     || fail "teardown exited non-zero with a valid tasktmp"
   [ ! -e "$task_tmp" ] \
     || fail "teardown did not remove the tasktmp dir ($task_tmp still exists)"
@@ -169,7 +173,11 @@ kind=ship
 mode=no-mistakes
 yolo=off
 META
-  bash "$fake/bin/fm-teardown.sh" "$id" >/dev/null 2>&1 \
+  # Neutralize any ambient FM_HOME/override so the real teardown resolves its
+  # state dir from the fake FM_ROOT (via BASH_SOURCE), as this test's design
+  # intends; an exported FM_HOME would otherwise redirect it to the live home.
+  env -u FM_HOME -u FM_ROOT_OVERRIDE -u FM_STATE_OVERRIDE -u FM_DATA_OVERRIDE \
+    -u FM_CONFIG_OVERRIDE bash "$fake/bin/fm-teardown.sh" "$id" >/dev/null 2>&1 \
     || fail "teardown exited non-zero when tasktmp= was absent"
   pass "fm-teardown skips gracefully when tasktmp= is absent (backward compat)"
 }
@@ -182,7 +190,11 @@ test_teardown_skips_gracefully_when_dir_missing() {
   [ ! -e "$task_tmp" ] || fail "precondition: task_tmp should not exist yet"
   local fake
   fake=$(make_fake_root "$id" "$task_tmp")
-  bash "$fake/bin/fm-teardown.sh" "$id" >/dev/null 2>&1 \
+  # Neutralize any ambient FM_HOME/override so the real teardown resolves its
+  # state dir from the fake FM_ROOT (via BASH_SOURCE), as this test's design
+  # intends; an exported FM_HOME would otherwise redirect it to the live home.
+  env -u FM_HOME -u FM_ROOT_OVERRIDE -u FM_STATE_OVERRIDE -u FM_DATA_OVERRIDE \
+    -u FM_CONFIG_OVERRIDE bash "$fake/bin/fm-teardown.sh" "$id" >/dev/null 2>&1 \
     || fail "teardown exited non-zero when tasktmp dir was missing"
   [ ! -e "$task_tmp" ] || fail "teardown created/left the tasktmp dir unexpectedly"
   pass "fm-teardown skips gracefully when tasktmp= points to a nonexistent dir"

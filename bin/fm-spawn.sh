@@ -640,22 +640,30 @@ fi
 # herdr-sm-spaces-k4). Both branches converge on the same $T ("target") string
 # that every downstream operation (send/capture/kill) already treats as opaque
 # per-backend routing (fm_backend_resolve_selector).
+# worktree_is_isolated <candidate>: 0 if <candidate> resolves to a settled,
+# isolated git worktree whose own toplevel is itself and which is distinct from
+# the primary project checkout ($PROJ_ABS); non-zero otherwise. Used both to gate
+# the post-`treehouse get` discovery poll below - so a transient intermediate cwd
+# (e.g. treehouse's own staging root ~/.treehouse while it materializes the leaf
+# worktree) is skipped rather than latched and then hard-refused - and by
+# validate_spawn_worktree as the final guard.
+worktree_is_isolated() {  # <candidate>
+  local cand=$1 cand_real proj_real cand_top cand_top_real
+  cand_real=$(cd "$cand" 2>/dev/null && pwd -P) || cand_real=
+  [ -n "$cand_real" ] || return 1
+  proj_real=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P) || proj_real=
+  cand_top=$(git -C "$cand" rev-parse --show-toplevel 2>/dev/null || true)
+  cand_top_real=$(cd "$cand_top" 2>/dev/null && pwd -P) || cand_top_real=
+  [ -n "$cand_top_real" ] || return 1
+  [ "$cand_real" = "$cand_top_real" ] || return 1
+  [ "$cand_real" != "$proj_real" ] || return 1
+  return 0
+}
+
 validate_spawn_worktree() {  # <source> <inspect-target>
-  local source=$1 inspect_target=$2 wt_real proj_real wt_top wt_top_real
-  wt_real=
-  if ! wt_real=$(cd "$WT" 2>/dev/null && pwd -P); then
-    wt_real=
-  fi
-  proj_real=
-  if ! proj_real=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P); then
-    proj_real=
-  fi
-  wt_top=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null || true)
-  wt_top_real=
-  if ! wt_top_real=$(cd "$wt_top" 2>/dev/null && pwd -P); then
-    wt_top_real=
-  fi
-  if [ -z "$wt_real" ] || [ -z "$wt_top_real" ] || [ "$wt_real" != "$wt_top_real" ] || [ "$wt_real" = "$proj_real" ]; then
+  local source=$1 inspect_target=$2 wt_top
+  if ! worktree_is_isolated "$WT"; then
+    wt_top=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null || true)
     echo "error: $source did not yield an isolated worktree (resolved '$WT'; worktree root '${wt_top:-none}'; primary '$PROJ_ABS'); refusing to launch to avoid tangling the primary checkout. Inspect target $inspect_target" >&2
     exit 1
   fi
@@ -793,12 +801,35 @@ spawn_send_key() {  # <target> <key>
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$T" 'treehouse get'
 
-  # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
+  # Wait for the treehouse subshell: the pane's cwd moves from the project to the
+  # worktree. Accept an isolated worktree as soon as it appears. A non-isolated
+  # cwd is ambiguous: while treehouse materializes the leaf worktree its own
+  # foreground process transiently sits in its staging root (~/.treehouse), so
+  # latching that intermediate cwd would hard-refuse the spawn a moment before the
+  # real leaf subshell is entered. But a non-isolated cwd that STAYS put is a
+  # genuine tangle (treehouse landed in the primary checkout or a non-worktree
+  # dir), which must be refused promptly. So we skip a non-isolated cwd while it is
+  # still changing, and only latch it - to let validate_spawn_worktree emit the
+  # isolation error - once it has settled (seen unchanged across a couple of polls).
+  prev_cwd=
+  same_cwd_streak=0
   for _ in $(seq 1 60); do
     p=$(spawn_current_path "$T" || true)
     if [ -n "$p" ] && [ "$p" != "$PROJ_ABS" ]; then
-      WT="$p"
-      break
+      if worktree_is_isolated "$p"; then
+        WT="$p"
+        break
+      fi
+      if [ "$p" = "$prev_cwd" ]; then
+        same_cwd_streak=$((same_cwd_streak + 1))
+      else
+        same_cwd_streak=0
+        prev_cwd=$p
+      fi
+      if [ "$same_cwd_streak" -ge 2 ]; then
+        WT="$p"
+        break
+      fi
     fi
     sleep 1
   done
