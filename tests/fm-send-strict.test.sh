@@ -34,6 +34,16 @@ case "${1:-}" in
     printf 'send-keys target=%s literal=%s arg=%s\n' "$target" "$literal" "${1:-}" >> "$FM_TMUX_LOG"
     exit 0 ;;
   display-message)
+    target=
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -t) target=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [ -n "${FM_FAKE_TMUX_DEAD_TARGET:-}" ] && [ "$target" = "$FM_FAKE_TMUX_DEAD_TARGET" ]; then
+      exit 1
+    fi
     printf '%%1\n'
     exit 0 ;;
   capture-pane)
@@ -120,6 +130,20 @@ test_prefixless_herdr_pane_id_fails() {
   pass "fm-send strict: prefixless herdr pane ids are rejected before tmux fallback"
 }
 
+test_unmatched_single_colon_target_must_exist() {
+  local dir fb home err log rc
+  dir="$TMP_ROOT/dead-explicit"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); home=$(setup_home deadexplicit); err="$dir/send.err"; log="$dir/tmux.log"; : > "$log"
+
+  PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_FAKE_TMUX_DEAD_TARGET=sess:missing FM_SEND_SETTLE=0 \
+    "$SEND" sess:missing "hello" >/dev/null 2>"$err"; rc=$?
+  [ "$rc" -ne 0 ] || fail "dead explicit tmux-shaped target should fail"
+  assert_contains "$(cat "$err")" "not a live tmux endpoint" "dead explicit target diagnostic should name the assumed backend"
+  assert_contains "$(cat "$err")" "backend=tmux" "dead explicit target diagnostic should name the tried backend"
+  [ ! -s "$log" ] || fail "dead explicit target still attempted a send"$'\n'"$(cat "$log")"
+  pass "fm-send strict: unmatched single-colon explicit targets must verify live before sending"
+}
+
 test_healthy_fm_id_send_still_works() {
   local dir fb home err log rc got
   dir="$TMP_ROOT/healthy"; mkdir -p "$dir"
@@ -140,4 +164,5 @@ test_bare_lane_id_fails_with_suggestion
 test_unset_fm_home_fails
 test_unresolvable_target_does_not_tmux_fallback
 test_prefixless_herdr_pane_id_fails
+test_unmatched_single_colon_target_must_exist
 test_healthy_fm_id_send_still_works
