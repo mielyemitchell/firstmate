@@ -265,6 +265,12 @@ GROK_HOME=              # optional Grok config home for firstmate's global grok 
 FM_SEND_RETRIES=3       # fm-send Enter-retry attempts after typing the line once
 FM_SEND_SLEEP=0.4       # seconds between fm-send submit checks
 FM_SEND_SETTLE=1        # seconds fm-send waits after a successful text submit; 0 disables
+FM_RESTART_TIMEOUT=120  # seconds fm-restart waits for a stowed secondmate harness to exit gracefully
+FM_RESTART_FORCE_TIMEOUT=20   # seconds fm-restart waits after --force interrupt/exit input
+FM_RESTART_CLEANUP_TIMEOUT=5  # seconds fm-restart waits for the old backend endpoint to disappear after cleanup
+FM_RESTART_STOW_TIMEOUT=120   # seconds fm-restart waits for a new 'stowed: restart-ready' status signal
+FM_RESTART_STOW_SETTLE=120    # legacy fallback for FM_RESTART_STOW_TIMEOUT when the latter is unset
+FM_RESTART_POLL_INTERVAL=1    # seconds between fm-restart stow/exit/cleanup polls
 # sub-supervisor (bin/fm-supervise-daemon.sh); presence-gated via /afk
 FM_SUPERVISOR_BACKEND=             # optional supervisor pane backend override; tmux/herdr only, otherwise detects $TMUX_PANE then HERDR_ENV/HERDR_PANE_ID before tmux fallback
 FM_SUPERVISOR_TARGET=              # optional supervisor pane target override; tmux target or herdr <session>:<pane-id>, otherwise auto-detected

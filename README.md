@@ -108,7 +108,26 @@ Setup guides for tmux (the default) and every other supported backend (herdr, ze
 
 You chat with the first mate.
 It routes each request to a crewmate in its own session endpoint and git worktree, supervises the fleet with a zero-token event-driven watcher, and brings you finished PRs, approved local merges, or investigation reports.
-Optional secondmates extend this to persistent domain supervisors, dispatch profiles let you steer which harness handles which task, and an opt-in X mode lets the same fleet answer public mentions.
+Persistent secondmate homes are linked firstmate worktrees; locked session start syncs live ones and secondmate launch syncs the target home to the primary default-branch commit without fetching from origin when it is safe.
+Crewmate dispatch can stay on a static `config/crew-harness` or use optional natural-language profiles in local `config/crew-dispatch.json` to choose a per-task harness, model, and effort.
+When that profile file exists, crewmate and scout spawns must pass the resolved harness explicitly so `config/crew-harness` is not used as an unnoticed bypass.
+Secondmate launch can use a separate local `config/secondmate-harness`, whose first non-empty, non-comment line is parsed as `<harness> [<model>] [<effort>]` to durably pin that secondmate's launch profile.
+The runtime session-provider backend is selected from explicit `--backend`, `FM_BACKEND`, local `config/backend`, runtime auto-detection from `$TMUX` or `HERDR_ENV=1`, then the hard `tmux` default.
+`tmux` is the verified reference backend.
+`herdr`, `zellij`, and `orca` are experimental task-spawn backends; herdr can also be auto-detected, while zellij and orca are selected only explicitly.
+Unlike tmux/herdr/zellij, Orca provides the task worktree as well as the terminal endpoint.
+Secondmate homes inherit the primary's declared local config, including `config/crew-dispatch.json`, `config/crew-harness`, and `config/backlog-backend`, at launch, during the locked session-start bootstrap step, or during an explicit `bin/fm-config-push.sh` run, so their own crewmates, dispatch profiles, and backlog backend use the primary settings.
+When a routed request goes to a secondmate, firstmate marks it so the answer returns through status or a document pointer; direct typing into that secondmate window stays conversational.
+When a live secondmate lane needs a clean context refresh, `bin/fm-restart.sh <id>` asks it to stow, waits for `stowed: restart-ready` unless `--skip-stow` is explicitly passed, exits the harness through the raw backend endpoint, verifies the process is gone, then respawns it through normal secondmate launch bookkeeping.
+A presence-gated sub-supervisor (`/afk`) can self-handle routine events and batch only what matters while you step away.
+An opt-in X mode can also use the watcher check path to answer your public `@myfirstmate` mentions and act on normal reversible mention requests from the current fleet state, with `FMX_DRY_RUN` available to test the poll -> compose -> would-post loop without publishing.
+The relay routes only the owner's own mentions to that owner's firstmate home; parent-thread context may still include other public accounts.
+The token is standing authorization for those autonomous replies and eligible lifecycle actions; destructive, irreversible, or security-sensitive asks are flagged for trusted-channel confirmation instead of being executed from a public mention.
+Requests that finish immediately get one public-safe outcome reply.
+Requests that spawn longer-running work get an acknowledgement first, a task link in local state, and one completion follow-up within the relay's 24h window when that task lands, reports, or fails.
+It preserves parent-tweet context for conversational replies and dismisses pure acknowledgments at the relay without posting.
+Replies can attach one local image with `--image <path>` when there is a visual artifact; long replies split into bounded numbered threads when needed, with the image attached only to the opener tweet.
+When firstmate works on itself, spawn-time isolation checks and a primary-checkout tangle alarm keep the operating checkout on its default branch and stop a crewmate that did not land in a separate worktree.
 
 Full architecture - the supervision engine, worktree isolation, secondmates, dispatch profiles, project modes, optional X mode, fleet sync, and self-update - is in [docs/architecture.md](docs/architecture.md).
 
