@@ -124,17 +124,22 @@ SH
 }
 
 # make_fake_herdr <fakebin> <live-pane>: `herdr pane get <pane>` succeeds only
-# for the given pane id - the exact primitive fm_backend_target_exists uses
-# for a herdr endpoint liveness read. No version/server-start calls: a
-# liveness check must never auto-start a server (fm-backend.sh's contract).
+# for the given pane id, and `herdr tab list` reports that pane's task label.
+# No version/server-start calls: a liveness check must never auto-start a
+# server (fm-backend.sh's contract).
 make_fake_herdr() {
   local fakebin=$1 live=$2
   cat > "$fakebin/herdr" <<SH
 #!/usr/bin/env bash
 set -u
 if [ "\${1:-}" = pane ] && [ "\${2:-}" = get ]; then
-  [ "\${3:-}" = "$live" ] && exit 0
-  exit 1
+  [ "\${3:-}" = "$live" ] || exit 1
+  printf '{"result":{"pane":{"pane_id":"%s","tab_id":"t-live"}}}\n' "$live"
+  exit 0
+fi
+if [ "\${1:-}" = tab ] && [ "\${2:-}" = list ]; then
+  printf '{"result":{"tabs":[{"tab_id":"t-live","label":"fm-task-live"}]}}\n'
+  exit 0
 fi
 exit 1
 SH
