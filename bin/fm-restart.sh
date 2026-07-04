@@ -2,7 +2,7 @@
 # Refresh a persistent secondmate lane by asking it to stow, sending the harness
 # exit command directly to the raw endpoint, waiting for the harness process to
 # leave, then respawning it through fm-spawn bookkeeping.
-# Usage: fm-restart.sh [--force] <secondmate-id>
+# Usage: fm-restart.sh [--force] [--skip-stow] <secondmate-id>
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,15 +16,17 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 "$FM_ROOT/bin/fm-guard.sh" || true
 
 usage() {
-  echo "usage: fm-restart.sh [--force] <secondmate-id>" >&2
+  echo "usage: fm-restart.sh [--force] [--skip-stow] <secondmate-id>" >&2
   exit 2
 }
 
 FORCE=0
+SKIP_STOW=0
 ID=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --force) FORCE=1 ;;
+    --skip-stow) SKIP_STOW=1 ;;
     -h|--help) usage ;;
     --*) echo "error: unknown option $1" >&2; usage ;;
     *)
@@ -39,15 +41,16 @@ done
 TIMEOUT=${FM_RESTART_TIMEOUT:-120}
 FORCE_TIMEOUT=${FM_RESTART_FORCE_TIMEOUT:-20}
 CLEANUP_TIMEOUT=${FM_RESTART_CLEANUP_TIMEOUT:-5}
-STOW_SETTLE=${FM_RESTART_STOW_SETTLE:-2}
+STOW_TIMEOUT=${FM_RESTART_STOW_TIMEOUT:-${FM_RESTART_STOW_SETTLE:-120}}
 POLL_INTERVAL=${FM_RESTART_POLL_INTERVAL:-1}
 case "$TIMEOUT" in ''|*[!0-9]*) echo "error: FM_RESTART_TIMEOUT must be whole seconds" >&2; exit 2 ;; esac
 case "$FORCE_TIMEOUT" in ''|*[!0-9]*) echo "error: FM_RESTART_FORCE_TIMEOUT must be whole seconds" >&2; exit 2 ;; esac
 case "$CLEANUP_TIMEOUT" in ''|*[!0-9]*) echo "error: FM_RESTART_CLEANUP_TIMEOUT must be whole seconds" >&2; exit 2 ;; esac
-case "$STOW_SETTLE" in ''|*[!0-9]*) echo "error: FM_RESTART_STOW_SETTLE must be whole seconds" >&2; exit 2 ;; esac
+case "$STOW_TIMEOUT" in ''|*[!0-9]*) echo "error: FM_RESTART_STOW_TIMEOUT must be whole seconds" >&2; exit 2 ;; esac
 
 META="$STATE/$ID.meta"
 [ -f "$META" ] || { echo "error: no meta for $ID at $META" >&2; exit 1; }
+STATUS_FILE="$STATE/$ID.status"
 
 KIND=$(fm_meta_get "$META" kind)
 [ "$KIND" = secondmate ] || { echo "error: $ID is kind=${KIND:-ship}; only secondmate lanes are restarted (crewmates are torn down)" >&2; exit 1; }
@@ -76,7 +79,11 @@ harness_command() {
 HARNESS_CMD=$(harness_command "$HARNESS")
 
 target_exists() {
-  fm_backend_target_exists "$BACKEND" "$T" "$EXPECTED_LABEL" >/dev/null 2>&1
+  target_exists_with_label "$EXPECTED_LABEL"
+}
+
+target_exists_with_label() {
+  fm_backend_target_exists "$BACKEND" "$T" "$1" >/dev/null 2>&1
 }
 
 harness_running() {
@@ -110,11 +117,29 @@ wait_for_exit() {  # <timeout-seconds>
   done
 }
 
-wait_for_target_gone() {  # <timeout-seconds>
-  local timeout=$1 deadline now
+wait_for_target_gone() {  # <timeout-seconds> [expected-label]
+  local timeout=$1 expected_label=${2:-$EXPECTED_LABEL} deadline now
   deadline=$(($(date +%s) + timeout))
   while :; do
-    ! target_exists && return 0
+    ! target_exists_with_label "$expected_label" && return 0
+    now=$(date +%s)
+    [ "$now" -lt "$deadline" ] || return 1
+    sleep "$POLL_INTERVAL"
+  done
+}
+
+status_line_count() {
+  [ -f "$STATUS_FILE" ] || { printf '0'; return 0; }
+  wc -l < "$STATUS_FILE" | tr -d '[:space:]'
+}
+
+wait_for_stow_signal() {  # <line-offset> <timeout-seconds>
+  local before=$1 timeout=$2 deadline now
+  deadline=$(($(date +%s) + timeout))
+  while :; do
+    if [ -f "$STATUS_FILE" ] && awk -v before="$before" 'NR > before && /^stowed: restart-ready([[:space:]]|$)/ { found = 1 } END { exit found ? 0 : 1 }' "$STATUS_FILE"; then
+      return 0
+    fi
     now=$(date +%s)
     [ "$now" -lt "$deadline" ] || return 1
     sleep "$POLL_INTERVAL"
@@ -122,10 +147,12 @@ wait_for_target_gone() {  # <timeout-seconds>
 }
 
 send_key_best_effort() {
+  target_exists || { echo "error: $ID target $T no longer belongs to $EXPECTED_LABEL; aborting before sending exit input" >&2; exit 1; }
   "$SCRIPT_DIR/fm-send.sh" "$T" --key "$1" >/dev/null 2>&1 || true
 }
 
 send_text_best_effort() {
+  target_exists || { echo "error: $ID target $T no longer belongs to $EXPECTED_LABEL; aborting before sending exit input" >&2; exit 1; }
   "$SCRIPT_DIR/fm-send.sh" "$T" "$1" >/dev/null 2>&1 || true
 }
 
@@ -203,8 +230,8 @@ cleanup_and_respawn() {
           echo "error: respawn failed; old herdr tab was left in place" >&2
           exit "$rc"
         fi
-        fm_backend_kill "$BACKEND" "$T" >/dev/null 2>&1 || true
-        if ! wait_for_target_gone "$CLEANUP_TIMEOUT"; then
+        fm_backend_kill "$BACKEND" "$T" "$archived_label" >/dev/null 2>&1 || true
+        if ! wait_for_target_gone "$CLEANUP_TIMEOUT" "$archived_label"; then
           echo "error: old herdr endpoint $T for $ID still exists after cleanup; close it manually before treating the lane as refreshed" >&2
           exit 1
         fi
@@ -214,7 +241,7 @@ cleanup_and_respawn() {
       ;;
     *)
       if target_exists; then
-        fm_backend_kill "$BACKEND" "$T" >/dev/null 2>&1 || true
+        fm_backend_kill "$BACKEND" "$T" "$EXPECTED_LABEL" >/dev/null 2>&1 || true
       fi
       respawn
       ;;
@@ -222,9 +249,17 @@ cleanup_and_respawn() {
 }
 
 if target_exists && harness_running; then
-  echo "restart: asking $ID to stow, then sending raw harness exit (timeout ${TIMEOUT}s)"
-  "$SCRIPT_DIR/fm-send.sh" "fm-$ID" "Stow any lane-local durable context now. Do not start new work; firstmate will refresh this lane." >/dev/null
-  [ "$STOW_SETTLE" = 0 ] || sleep "$STOW_SETTLE"
+  if [ "$SKIP_STOW" -eq 1 ]; then
+    echo "restart: skipping stow confirmation for $ID, then sending raw harness exit (timeout ${TIMEOUT}s)"
+  else
+    before_stow=$(status_line_count)
+    echo "restart: asking $ID to stow; waiting for status 'stowed: restart-ready' (timeout ${STOW_TIMEOUT}s)"
+    "$SCRIPT_DIR/fm-send.sh" "fm-$ID" "Stow any lane-local durable context now. Do not start new work; firstmate will refresh this lane. When stow is complete, append exactly 'stowed: restart-ready' to your status." >/dev/null
+    if ! wait_for_stow_signal "$before_stow" "$STOW_TIMEOUT"; then
+      echo "error: $ID did not confirm stow within ${STOW_TIMEOUT}s; aborting before exit. Rerun with --skip-stow only if the lane is already stowed or safe to restart." >&2
+      exit 1
+    fi
+  fi
   graceful_exit_sequence
   if ! wait_for_exit "$TIMEOUT"; then
     if [ "$FORCE" -ne 1 ]; then

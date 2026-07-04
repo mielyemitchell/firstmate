@@ -502,7 +502,7 @@ fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sl
 # fm_backend_kill: remove the task's session endpoint (best-effort; a
 # nonexistent/already-gone target is not an error - callers already swallow
 # failures here exactly as the inline `tmux kill-window ... || true` did).
-fm_backend_kill() {  # <backend> <target>
+fm_backend_kill() {  # <backend> <target> [expected-label]
   local backend=$1
   shift
   fm_backend_source "$backend" || return 1
@@ -591,7 +591,7 @@ fm_backend_composer_state() {  # <backend> <target> -> empty|pending|unknown
 # primitive so callers that only need a fast alive/dead read (recovery
 # digests, the session-start fleet digest) do not re-derive it inline.
 fm_backend_target_exists() {  # <backend> <target> [expected-label]
-  local backend=$1 target=$2 expected_label=${3:-} session pane
+  local backend=$1 target=$2 expected_label=${3:-} session pane out tab_id label
   case "$backend" in
     tmux)
       tmux display-message -p -t "$target" '#{pane_id}' >/dev/null 2>&1
@@ -609,7 +609,15 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
       # flag on top, so this check is correctly scoped even when the caller's
       # own ambient session (e.g. the primary firstmate's default session) is
       # a DIFFERENT one than the target's.
-      fm_backend_herdr_cli "$session" pane get "$pane" >/dev/null 2>&1
+      out=$(fm_backend_herdr_cli "$session" pane get "$pane" 2>/dev/null) || return 1
+      if [ -n "$expected_label" ]; then
+        tab_id=$(printf '%s' "$out" | jq -r '.result.pane.tab_id // empty' 2>/dev/null)
+        [ -n "$tab_id" ] || return 1
+        label=$(fm_backend_herdr_cli "$session" tab list 2>/dev/null \
+          | jq -r --arg tab "$tab_id" '.result.tabs[]? | select(.tab_id == $tab) | .label' 2>/dev/null | head -1)
+        [ "$label" = "$expected_label" ] || return 1
+      fi
+      return 0
       ;;
     zellij)
       fm_backend_source zellij || return 1

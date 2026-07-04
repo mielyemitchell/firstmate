@@ -24,7 +24,7 @@ SH
 set -u
 printf 'send:%s:%s\n' "${1:-}" "${2:-}" >> "$FM_RESTART_LOG"
 case "${1:-}:${2:-}" in
-  fm-lane:Stow*) ;;
+  fm-lane:Stow*) printf 'stowed: restart-ready\n' >> "$FM_HOME/state/lane.status" ;;
   *:/quit|*:/exit)
     printf 'zsh\n' > "$FM_FAKE_COMMAND_FILE"
     printf 'zsh\n' > "$FM_FAKE_PROCESS_ARGV_FILE"
@@ -102,13 +102,16 @@ case "$cmd" in
     [ "$(cat "$FM_FAKE_EXISTS_FILE" 2>/dev/null || echo 1)" = 1 ] || exit 1
     printf '{"result":{"pane":{"pane_id":"w1:p1","tab_id":"w1:t1"}}}\n'
     ;;
+  "tab list")
+    printf '{"result":{"tabs":[{"tab_id":"w1:t1","label":"%s","workspace_id":"w1"}]}}\n' "$(cat "$FM_FAKE_LABEL_FILE" 2>/dev/null || echo fm-lane)"
+    ;;
   "pane process-info")
     [ "$(cat "$FM_FAKE_EXISTS_FILE" 2>/dev/null || echo 1)" = 1 ] || exit 1
     cmd_name=$(cat "$FM_FAKE_COMMAND_FILE")
     printf '{"result":{"process_info":{"foreground_processes":[{"argv0":"%s","argv":["%s"]}]}}}\n' "$cmd_name" "$cmd_name"
     ;;
   "tab rename")
-    printf 'label:%s\n' "${args[3]:-}" > "$FM_FAKE_LABEL_FILE"
+    printf '%s\n' "${args[3]:-}" > "$FM_FAKE_LABEL_FILE"
     ;;
   "pane close")
     [ -f "$FM_FAKE_CLOSE_STICKS_FILE" ] || printf '0\n' > "$FM_FAKE_EXISTS_FILE"
@@ -127,6 +130,7 @@ new_case() {
   printf '1\n' > "$dir/exists"
   printf 'codex\n' > "$dir/command"
   printf 'codex\n' > "$dir/process-argv"
+  printf 'fm-lane\n' > "$dir/label"
   : > "$dir/log"
   printf '%s\n' "$dir"
 }
@@ -261,9 +265,9 @@ test_herdr_cleanup_failure_refuses_success() {
   pass "fm-restart: herdr cleanup verifies the old endpoint is gone before success"
 }
 
-test_timeout_aborts_without_force() {
+test_stow_timeout_aborts_before_exit() {
   local dir root fb out status
-  dir=$(new_case timeout); root=$(make_restart_root "$dir"); fb=$(make_fake_tmux "$dir")
+  dir=$(new_case stow-timeout); root=$(make_restart_root "$dir"); fb=$(make_fake_tmux "$dir")
   cat > "$root/bin/fm-send.sh" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -272,11 +276,58 @@ exit 0
 SH
   chmod +x "$root/bin/fm-send.sh"
   write_lane_meta "$dir" secondmate tmux firstmate:fm-lane
+  FM_RESTART_STOW_TIMEOUT=0 out=$(run_restart "$dir" "$root" "$fb" lane 2>&1); status=$?
+  [ "$status" -ne 0 ] || fail "stow timeout should fail"
+  assert_contains "$out" "did not confirm stow" "stow timeout did not explain missing status signal"
+  assert_not_contains "$(cat "$dir/log")" "send:firstmate:fm-lane:/quit" "stow timeout must not send raw exit"
+  assert_not_contains "$(cat "$dir/log")" "spawn:" "stow timeout must not respawn"
+  pass "fm-restart: stow timeout aborts before raw exit"
+}
+
+test_skip_stow_bypasses_stow_signal() {
+  local dir root fb log
+  dir=$(new_case skip-stow); root=$(make_restart_root "$dir"); fb=$(make_fake_tmux "$dir")
+  cat > "$root/bin/fm-send.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf 'send:%s:%s\n' "${1:-}" "${2:-}" >> "$FM_RESTART_LOG"
+case "${1:-}:${2:-}" in
+  *:/quit|*:/exit)
+    printf 'zsh\n' > "$FM_FAKE_COMMAND_FILE"
+    printf 'zsh\n' > "$FM_FAKE_PROCESS_ARGV_FILE"
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$root/bin/fm-send.sh"
+  write_lane_meta "$dir" secondmate tmux firstmate:fm-lane
+  run_restart "$dir" "$root" "$fb" --skip-stow lane >/dev/null || fail "skip-stow restart failed"
+  log=$(cat "$dir/log")
+  assert_not_contains "$log" "send:fm-lane:Stow" "--skip-stow should not ask the lane to stow"
+  assert_contains "$log" "send:firstmate:fm-lane:/quit" "--skip-stow should still send raw exit"
+  assert_contains "$log" "spawn:lane --backend tmux --secondmate" "--skip-stow should respawn"
+  pass "fm-restart: --skip-stow is the explicit stow escape hatch"
+}
+
+test_exit_timeout_aborts_without_force_after_stow() {
+  local dir root fb out status
+  dir=$(new_case exit-timeout); root=$(make_restart_root "$dir"); fb=$(make_fake_tmux "$dir")
+  cat > "$root/bin/fm-send.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf 'send:%s:%s\n' "${1:-}" "${2:-}" >> "$FM_RESTART_LOG"
+case "${1:-}:${2:-}" in
+  fm-lane:Stow*) printf 'stowed: restart-ready\n' >> "$FM_HOME/state/lane.status" ;;
+esac
+exit 0
+SH
+  chmod +x "$root/bin/fm-send.sh"
+  write_lane_meta "$dir" secondmate tmux firstmate:fm-lane
   FM_RESTART_TIMEOUT=0 out=$(run_restart "$dir" "$root" "$fb" lane 2>&1); status=$?
-  [ "$status" -ne 0 ] || fail "timeout without force should fail"
-  assert_contains "$out" "rerun with --force" "timeout did not explain --force recovery"
-  assert_not_contains "$(cat "$dir/log")" "spawn:" "timeout without force must not respawn"
-  pass "fm-restart: timeout aborts honestly without --force"
+  [ "$status" -ne 0 ] || fail "exit timeout without force should fail"
+  assert_contains "$out" "rerun with --force" "exit timeout did not explain --force recovery"
+  assert_not_contains "$(cat "$dir/log")" "spawn:" "exit timeout without force must not respawn"
+  pass "fm-restart: exit timeout aborts honestly without --force after stow"
 }
 
 test_force_uses_exit_sequence_then_respawns() {
@@ -290,7 +341,7 @@ exit 0
 SH
   chmod +x "$root/bin/fm-send.sh"
   write_lane_meta "$dir" secondmate tmux firstmate:fm-lane
-  FM_RESTART_TIMEOUT=0 FM_RESTART_FORCE_TIMEOUT=0 run_restart "$dir" "$root" "$fb" --force lane >/dev/null \
+  FM_RESTART_TIMEOUT=0 FM_RESTART_FORCE_TIMEOUT=0 run_restart "$dir" "$root" "$fb" --skip-stow --force lane >/dev/null \
     || fail "forced restart failed"
   log=$(cat "$dir/log")
   assert_contains "$log" "send:firstmate:fm-lane:--key" "force did not send an interrupt key through fm-send"
@@ -300,6 +351,21 @@ SH
   pass "fm-restart: --force uses harness exit sequence, then closes and respawns"
 }
 
+test_herdr_stale_label_refuses_restart() {
+  local dir root fb out status log
+  dir=$(new_case herdr-stale-label); root=$(make_restart_root "$dir"); fb=$(make_fake_herdr "$dir")
+  printf 'fm-other\n' > "$dir/label"
+  write_lane_meta "$dir" secondmate herdr herdrtest:w1:p1
+  out=$(run_restart "$dir" "$root" "$fb" --skip-stow lane 2>&1); status=$?
+  [ "$status" -eq 0 ] || fail "stale herdr target should be treated as a dead lane and respawn cleanly, got: $out"
+  log=$(cat "$dir/log")
+  assert_not_contains "$log" "send:herdrtest:w1:p1:/quit" "stale herdr target must not receive raw exit"
+  assert_not_contains "$log" "herdr:tab rename" "stale herdr target must not be renamed"
+  assert_not_contains "$log" "herdr:pane close" "stale herdr target must not be closed"
+  assert_contains "$log" "spawn:lane --backend herdr --secondmate" "stale herdr lane should still respawn"
+  pass "fm-restart: stale herdr pane labels are not controlled"
+}
+
 test_refuses_non_secondmate
 test_dead_lane_respawns_without_nudge
 test_refuses_unsupported_backend
@@ -307,5 +373,8 @@ test_tmux_live_lane_stows_exits_kills_then_respawns
 test_tmux_node_wrapped_codex_stows_before_respawn
 test_herdr_live_lane_renames_spawns_then_closes_old_tab
 test_herdr_cleanup_failure_refuses_success
-test_timeout_aborts_without_force
+test_stow_timeout_aborts_before_exit
+test_skip_stow_bypasses_stow_signal
+test_exit_timeout_aborts_without_force_after_stow
 test_force_uses_exit_sequence_then_respawns
+test_herdr_stale_label_refuses_restart
