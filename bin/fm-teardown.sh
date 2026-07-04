@@ -24,6 +24,12 @@
 # local-only projects additionally accept work merged into the local default
 # branch (firstmate performs that merge on the captain's approval) as a fallback
 # for the common case where there is no remote at all.
+# Campaign tasks (kind=campaign in meta) are the sanctioned multi-branch case:
+# a PR-based campaign accumulates one branch per batch, all named under the
+# task's fm/<task-id> prefix per the campaign brief. Teardown verifies EVERY
+# fm/<task-id>-prefixed local branch by the same landed-work standard, refuses
+# naming any branch that holds unlanded commits, and deletes all of them at
+# cleanup so the pooled clone does not accumulate orphaned refs.
 # Scout tasks (kind=scout in meta) carve out of that check: their worktree is
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product - teardown proceeds once the report exists, and refuses without it.
@@ -183,8 +189,8 @@ patch_id_for_commit() {
 }
 
 unpushed_patches_are_in_pr_head() {
-  local pr_head=$1 current base pr_patch_ids commit patch_id unpushed
-  current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || return 1
+  local pr_head=$1 tip=${2:-HEAD} current base pr_patch_ids commit patch_id unpushed
+  current=$(git -C "$WT" rev-parse --verify "$tip" 2>/dev/null) || return 1
   base=$(git -C "$WT" merge-base "$current" "$pr_head" 2>/dev/null) || return 1
   pr_patch_ids=$(
     git -C "$WT" log --format=%H "$base..$pr_head" -- 2>/dev/null \
@@ -195,7 +201,7 @@ unpushed_patches_are_in_pr_head() {
       | sort -u
   ) || return 1
   [ -n "$pr_patch_ids" ] || return 1
-  unpushed=$(git -C "$WT" log --format=%H HEAD --not --remotes -- 2>/dev/null) || return 1
+  unpushed=$(git -C "$WT" log --format=%H "$tip" --not --remotes -- 2>/dev/null) || return 1
   [ -n "$unpushed" ] || return 1
   while IFS= read -r commit; do
     [ -n "$commit" ] || continue
@@ -213,7 +219,7 @@ EOF
 # current work is not contained in the PR head, no PR is found, or any gh error
 # occurs - the caller then falls back to the content check.
 pr_is_merged() {
-  local branch=$1 target view state head current
+  local branch=$1 tip=${2:-HEAD} target view state head current
   if [ -n "$PR_URL" ]; then
     target=$PR_URL
   else
@@ -230,9 +236,9 @@ pr_is_merged() {
   esac
   [ -n "$head" ] || return 1
   ensure_commit_object "$target" "$head" || return 1
-  current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || return 1
+  current=$(git -C "$WT" rev-parse --verify "$tip" 2>/dev/null) || return 1
   git -C "$WT" merge-base --is-ancestor "$current" "$head" 2>/dev/null && return 0
-  unpushed_patches_are_in_pr_head "$head"
+  unpushed_patches_are_in_pr_head "$head" "$tip"
 }
 
 # Is the branch's content already present in the up-to-date default branch? Fetches
@@ -243,7 +249,7 @@ pr_is_merged() {
 # "added". Returns non-zero when inconclusive (no default ref, or a merge conflict),
 # so the caller refuses rather than guesses.
 content_in_default() {
-  local name ref default_tree merged_tree
+  local tip=${1:-HEAD} name ref default_tree merged_tree
   name=$(default_branch) || return 1
   if git -C "$WT" remote get-url origin >/dev/null 2>&1; then
     git -C "$WT" fetch --quiet origin "+refs/heads/$name:refs/remotes/origin/$name" >/dev/null 2>&1 || return 1
@@ -255,7 +261,7 @@ content_in_default() {
   fi
   default_tree=$(git -C "$WT" rev-parse --quiet --verify "$ref^{tree}" 2>/dev/null) || return 1
   [ -n "$default_tree" ] || return 1
-  merged_tree=$(git -C "$WT" merge-tree --write-tree "$ref" HEAD 2>/dev/null) || return 1
+  merged_tree=$(git -C "$WT" merge-tree --write-tree "$ref" "$tip" 2>/dev/null) || return 1
   merged_tree=$(printf '%s\n' "$merged_tree" | head -1)
   [ "$merged_tree" = "$default_tree" ]
 }
@@ -266,9 +272,68 @@ content_in_default() {
 # default branch (fallback, which also covers the no-PR and gh-error paths). False
 # only for genuinely unlanded work.
 work_is_landed() {
-  local branch=$1
-  pr_is_merged "$branch" && return 0
-  content_in_default
+  local branch=$1 tip=${2:-HEAD}
+  pr_is_merged "$branch" "$tip" && return 0
+  content_in_default "$tip"
+}
+
+# All local branches under the task's fm/<id> prefix: the fixed fm/<id> branch
+# (ship and local-only campaigns) plus fm/<id>/* batch branches (PR-based
+# campaigns, per the campaign brief's naming convention).
+task_prefixed_branches() {
+  git -C "$WT" for-each-ref --format='%(refname:short)' \
+    "refs/heads/fm/$ID" "refs/heads/fm/$ID/*" 2>/dev/null || true
+}
+
+# Detach the worktree, then drop the local task branch(es) so the shared repo
+# does not accumulate refs. Campaigns drop every fm/<id>-prefixed branch, not
+# just the checked-out one; safety was already verified per branch above.
+drop_local_task_branches() {
+  local branch cb
+  branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+  if [ "$branch" != "HEAD" ]; then
+    if git -C "$WT" checkout --detach -q 2>/dev/null; then
+      git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
+    fi
+  fi
+  if [ "$KIND" = campaign ]; then
+    while IFS= read -r cb; do
+      [ -n "$cb" ] || continue
+      git -C "$WT" branch -D "$cb" >/dev/null 2>&1 || true
+    done <<EOF
+$(task_prefixed_branches)
+EOF
+  fi
+}
+
+# Campaign multi-branch protection: every fm/<id>-prefixed local branch must be
+# landed by the same standard the HEAD check applies, or teardown refuses naming
+# the branch. HEAD alone is not enough for campaigns, whose earlier batch
+# branches can hold unlanded commits while HEAD sits elsewhere.
+refuse_unlanded_campaign_branches() {
+  local cb cb_unpushed cb_unmerged
+  while IFS= read -r cb; do
+    [ -n "$cb" ] || continue
+    cb_unpushed=$(git -C "$WT" log --oneline "$cb" --not --remotes -- 2>/dev/null | head -5 || true)
+    [ -n "$cb_unpushed" ] || continue
+    if [ "$MODE" = local-only ]; then
+      DEFAULT=$(default_branch) || { echo "REFUSED: cannot determine default branch for $PROJ; expected origin/HEAD, main, or master." >&2; exit 1; }
+      cb_unmerged=$(git -C "$WT" log --oneline "$cb" --not "$DEFAULT" -- 2>/dev/null | head -5 || true)
+      if [ -n "$cb_unmerged" ]; then
+        echo "REFUSED: campaign branch $cb in $WT has work not yet merged into $DEFAULT and not on any remote." >&2
+        printf 'commits not yet on %s:\n%s\n' "$DEFAULT" "$cb_unmerged" >&2
+        echo "Merge the branch into local $DEFAULT first (bin/fm-merge-local.sh after the captain approves), or push to a fork/remote, or get the captain's explicit OK to discard, then --force." >&2
+        exit 1
+      fi
+    elif ! work_is_landed "$cb" "$cb"; then
+      echo "REFUSED: campaign branch $cb in $WT has work not on any remote and not landed." >&2
+      printf 'unpushed commits:\n%s\n' "$cb_unpushed" >&2
+      echo "Push the branch, land its PR, or get the captain's explicit OK to discard, then --force." >&2
+      exit 1
+    fi
+  done <<EOF
+$(task_prefixed_branches)
+EOF
 }
 
 backlog_refresh_reminder() {
@@ -762,6 +827,9 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
         exit 1
       fi
     fi
+    if [ "$KIND" = campaign ]; then
+      refuse_unlanded_campaign_branches
+    fi
   fi
 fi
 
@@ -772,23 +840,13 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
     ORCA_PATH_MATCH_VERIFIED=1
   fi
   if [ -d "$WT" ]; then
-    branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-    if [ "$branch" != "HEAD" ]; then
-      if git -C "$WT" checkout --detach -q 2>/dev/null; then
-        git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
-      fi
-    fi
+    drop_local_task_branches
     rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" "$WT/.fm-grok-turnend"
   fi
   [ -z "$T_ORCA" ] || fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
   fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
 elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
-  branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-  if [ "$branch" != "HEAD" ]; then
-    if git -C "$WT" checkout --detach -q 2>/dev/null; then
-      git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
-    fi
-  fi
+  drop_local_task_branches
   # Remove our hook file so a reused pool worktree cannot fire signals for a dead task.
   rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" "$WT/.fm-grok-turnend"
   # Kills remaining processes in the worktree (including the agent), resets, returns

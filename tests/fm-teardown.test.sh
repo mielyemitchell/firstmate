@@ -35,6 +35,11 @@
 #   (p) fm-pr-check when local HEAD lags                        -> record remote PR head
 #   (q) no-mistakes + NO pr= recorded, PR discovered by branch  -> ALLOW  (yolo/no-CI merge)
 #   (r) campaign + unpushed, no PR, content not in default      -> REFUSE (ship-like protection)
+#   (s) campaign + landed batch branch + unlanded batch branch,
+#       HEAD detached off both                                  -> REFUSE naming the branch
+#   (t) campaign + all batch branches landed, HEAD detached     -> ALLOW + all fm/<id>/* refs deleted
+#   (u) local-only campaign + unmerged fm/<id> branch,
+#       HEAD detached at origin/main                            -> REFUSE (not HEAD-scoped)
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -416,6 +421,98 @@ test_campaign_truly_unpushed_refuses() {
   pass "campaign worktree with genuinely unlanded work is refused like ship work"
 }
 
+# Reshape the worktree from make_case's ship layout (checked out on fm/task-x1)
+# into a PR-campaign layout: detached HEAD at the launch commit with no fixed
+# fm/task-x1 branch, so hierarchical fm/task-x1/<batch> refs can exist.
+detach_wt_as_campaign_base() {
+  local case_dir=$1
+  git -C "$case_dir/wt" checkout -q --detach
+  git -C "$case_dir/wt" branch -q -D fm/task-x1
+}
+
+# Create a campaign batch branch from the given start point and commit one file
+# change on it. Args: case_dir branch start_point file content
+add_campaign_batch_branch() {
+  local case_dir=$1 branch=$2 start=$3 file=$4 content=$5
+  git -C "$case_dir/wt" switch -q -c "$branch" "$start"
+  wt_commit_file "$case_dir" "$file" "$content" "add $file"
+}
+
+test_campaign_unlanded_batch_branch_refuses_even_when_head_clean() {
+  local case_dir rc launch
+  case_dir=$(make_case campaign-batch-unlanded)
+  write_meta "$case_dir" no-mistakes campaign
+  detach_wt_as_campaign_base "$case_dir"
+  launch=$(git -C "$case_dir/wt" rev-parse HEAD)
+  # Batch 1: landed on origin/main via an equivalent squash commit.
+  add_campaign_batch_branch "$case_dir" fm/task-x1/b1 "$launch" batch1.txt one
+  land_on_origin_main "$case_dir" batch1.txt one
+  # Batch 2: genuinely unlanded work on its own branch.
+  add_campaign_batch_branch "$case_dir" fm/task-x1/b2 "$launch" batch2.txt two
+  # Park HEAD back on the launch commit, off every batch branch: the old
+  # HEAD-scoped check saw nothing unpushed here and allowed teardown.
+  git -C "$case_dir/wt" checkout -q --detach "$launch"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "campaign-batch-unlanded: teardown should refuse for the unlanded batch branch"
+  grep -q REFUSED "$case_dir/stderr" || fail "campaign-batch-unlanded: no REFUSED line in stderr"
+  grep -q "fm/task-x1/b2" "$case_dir/stderr" || fail "campaign-batch-unlanded: refusal did not name the unlanded branch"
+  git -C "$case_dir/project" show-ref --verify --quiet refs/heads/fm/task-x1/b2 \
+    || fail "campaign-batch-unlanded: refusal deleted the unlanded batch branch"
+  pass "campaign teardown refuses an unlanded batch branch even with HEAD parked elsewhere"
+}
+
+test_campaign_all_batches_landed_allows_and_prunes_refs() {
+  local case_dir rc launch
+  case_dir=$(make_case campaign-batches-landed)
+  write_meta "$case_dir" no-mistakes campaign
+  detach_wt_as_campaign_base "$case_dir"
+  launch=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_campaign_batch_branch "$case_dir" fm/task-x1/b1 "$launch" batch1.txt one
+  land_on_origin_main "$case_dir" batch1.txt one
+  add_campaign_batch_branch "$case_dir" fm/task-x1/b2 "$launch" batch2.txt two
+  land_on_origin_main "$case_dir" batch2.txt two
+  git -C "$case_dir/wt" checkout -q --detach "$launch"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "campaign-batches-landed: teardown should succeed when every batch branch has landed"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "campaign-batches-landed: teardown printed a REFUSED line"
+  git -C "$case_dir/project" show-ref --verify --quiet refs/heads/fm/task-x1/b1 \
+    && fail "campaign-batches-landed: teardown left batch branch fm/task-x1/b1 behind"
+  git -C "$case_dir/project" show-ref --verify --quiet refs/heads/fm/task-x1/b2 \
+    && fail "campaign-batches-landed: teardown left batch branch fm/task-x1/b2 behind"
+  pass "campaign teardown with all batches landed proceeds and prunes every fm/<id>/* ref"
+}
+
+test_local_only_campaign_unmerged_branch_refuses_when_head_detached() {
+  local case_dir rc
+  case_dir=$(make_case campaign-local-detached)
+  write_meta "$case_dir" local-only campaign
+  # Unmerged campaign work sits on the fixed fm/task-x1 branch...
+  wt_commit_file "$case_dir" feature.txt hello "campaign work"
+  # ...while HEAD is parked on the already-landed baseline, so the HEAD-scoped
+  # check alone would see nothing to protect.
+  git -C "$case_dir/wt" checkout -q --detach origin/main
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "campaign-local-detached: teardown should refuse for the unmerged fixed branch"
+  grep -q REFUSED "$case_dir/stderr" || fail "campaign-local-detached: no REFUSED line in stderr"
+  grep -q "fm/task-x1" "$case_dir/stderr" || fail "campaign-local-detached: refusal did not name the branch"
+  pass "local-only campaign teardown refuses the unmerged fixed branch with HEAD detached"
+}
+
 test_squash_merged_branch_deleted_allows() {
   local case_dir rc pr_head
   case_dir=$(make_case squash-merged)
@@ -699,6 +796,9 @@ test_local_only_merged_to_local_main_allows
 test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses
 test_campaign_truly_unpushed_refuses
+test_campaign_unlanded_batch_branch_refuses_even_when_head_clean
+test_campaign_all_batches_landed_allows_and_prunes_refs
+test_local_only_campaign_unmerged_branch_refuses_when_head_detached
 test_local_only_force_overrides_unpushed
 test_squash_merged_branch_deleted_allows
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head
