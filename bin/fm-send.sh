@@ -59,7 +59,7 @@ fi
 # shellcheck source=bin/fm-marker-lib.sh
 . "$SCRIPT_DIR/fm-marker-lib.sh"
 
-"$SCRIPT_DIR/fm-guard.sh" || true
+FM_GUARD_CONTINUE_LINE='This is a supervision warning only; the requested message WILL still be sent.' "$SCRIPT_DIR/fm-guard.sh" || true
 
 fm_send_id_from_meta() {  # <meta-file>
   local base

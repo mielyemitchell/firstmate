@@ -710,7 +710,8 @@ While running, `fm-watch.sh` touches `state/.last-watcher-beat` every poll cycle
 The supervision scripts (`fm-peek`, `fm-send`, `fm-spawn`, `fm-teardown`, `fm-pr-check`, `fm-promote`, `fm-review-diff`, `fm-fleet-sync`, `fm-update`) call `bin/fm-guard.sh` first, which warns to stderr when any task is in flight (`state/*.meta` exists) but queued wakes are pending, or that beacon is missing or older than `FM_GUARD_GRACE` (default 300s).
 `bin/fm-wake-drain.sh` runs the same guard after it drains, so the liveness check also fires on a drain-and-handle turn that runs no other supervision script, narrowing the window in which a lapsed chain can hide; the grace beacon keeps it silent right after a normal fire and it warns only on a genuine stale-beyond-grace lapse.
 The no-watcher case leads with a prominent, bordered ●-marked banner (in-flight count, beacon age, and the exact one-line re-arm command) so it reads as an alarm rather than a buried stderr line you can skim past.
-The banner is only a supervision warning: the guarded operation still runs, and the text says explicitly that a requested message WILL still be sent.
+The banner is only a supervision warning: the guarded operation still runs.
+When the guarded operation is `fm-send`, `fm-send` sets the banner's continuation line to say explicitly that the requested message WILL still be sent.
 So the next time you touch the fleet with queued wakes or no watcher alive, the tool output itself tells you what to do - a pull-based guard that works on any harness, since it rides the script output you already read rather than a harness-specific hook.
 The grace window keeps normal handling (watcher briefly down between a wake and its re-arm) silent.
 If a guard warning says queued wakes are pending, drain them before doing anything else.
