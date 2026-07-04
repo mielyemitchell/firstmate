@@ -202,6 +202,40 @@ test_refuses_unsupported_backend() {
   pass "fm-restart: refuses unsupported backends instead of guessing process state"
 }
 
+test_live_lane_with_unknown_process_state_aborts_before_stow() {
+  local dir root fb out status log
+  dir=$(new_case unknown-process); root=$(make_restart_root "$dir"); fb=$(make_fake_tmux "$dir")
+  : > "$dir/command"
+  : > "$dir/process-argv"
+  write_lane_meta "$dir" secondmate tmux firstmate:fm-lane
+  out=$(run_restart "$dir" "$root" "$fb" lane 2>&1); status=$?
+  [ "$status" -ne 0 ] || fail "unknown live process state should fail"
+  assert_contains "$out" "foreground process state is unknown" "unknown process state did not explain the safety abort"
+  log=$(cat "$dir/log")
+  assert_not_contains "$log" "send:fm-lane:Stow" "unknown process state must not ask for stow through an uncertain endpoint"
+  assert_not_contains "$log" "send:firstmate:fm-lane:/quit" "unknown process state must not send raw exit"
+  assert_not_contains "$log" "tmux:kill-window" "unknown process state must not clean up"
+  assert_not_contains "$log" "spawn:" "unknown process state must not respawn"
+  pass "fm-restart: live lane with unknown process state aborts before stow"
+}
+
+test_live_lane_with_mismatched_process_aborts_before_cleanup() {
+  local dir root fb out status log
+  dir=$(new_case mismatched-process); root=$(make_restart_root "$dir"); fb=$(make_fake_tmux "$dir")
+  printf 'zsh\n' > "$dir/command"
+  printf 'zsh\n' > "$dir/process-argv"
+  write_lane_meta "$dir" secondmate tmux firstmate:fm-lane
+  out=$(run_restart "$dir" "$root" "$fb" lane 2>&1); status=$?
+  [ "$status" -ne 0 ] || fail "mismatched live process should fail without --skip-stow"
+  assert_contains "$out" "foreground process does not match codex" "mismatched process did not explain the safety abort"
+  log=$(cat "$dir/log")
+  assert_not_contains "$log" "send:fm-lane:Stow" "mismatched process state must not ask for stow"
+  assert_not_contains "$log" "send:firstmate:fm-lane:/quit" "mismatched process state must not send raw exit"
+  assert_not_contains "$log" "tmux:kill-window" "mismatched process state must not clean up"
+  assert_not_contains "$log" "spawn:" "mismatched process state must not respawn"
+  pass "fm-restart: live lane with mismatched process aborts before cleanup"
+}
+
 test_tmux_live_lane_stows_exits_kills_then_respawns() {
   local dir root fb log
   dir=$(new_case tmux-live); root=$(make_restart_root "$dir"); fb=$(make_fake_tmux "$dir")
@@ -369,6 +403,8 @@ test_herdr_stale_label_refuses_restart() {
 test_refuses_non_secondmate
 test_dead_lane_respawns_without_nudge
 test_refuses_unsupported_backend
+test_live_lane_with_unknown_process_state_aborts_before_stow
+test_live_lane_with_mismatched_process_aborts_before_cleanup
 test_tmux_live_lane_stows_exits_kills_then_respawns
 test_tmux_node_wrapped_codex_stows_before_respawn
 test_herdr_live_lane_renames_spawns_then_closes_old_tab

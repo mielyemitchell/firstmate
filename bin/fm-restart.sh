@@ -86,13 +86,13 @@ target_exists_with_label() {
   fm_backend_target_exists "$BACKEND" "$T" "$1" >/dev/null 2>&1
 }
 
-harness_running() {
+harness_process_state() {
   local processes cmd
   cmd=$HARNESS_CMD
-  [ -n "$cmd" ] && [ "$cmd" != unknown ] || return 1
+  [ -n "$cmd" ] && [ "$cmd" != unknown ] || { printf 'unknown'; return 0; }
   processes=$(fm_backend_foreground_process "$BACKEND" "$T" "$EXPECTED_LABEL" 2>/dev/null || true)
-  [ -n "$processes" ] || return 1
-  printf '%s\n' "$processes" | awk -v want="$cmd" '
+  [ -n "$processes" ] || { printf 'unknown'; return 0; }
+  if printf '%s\n' "$processes" | awk -v want="$cmd" '
     {
       for (i = 1; i <= NF; i++) {
         token = $i
@@ -102,7 +102,11 @@ harness_running() {
       }
     }
     END { exit found ? 0 : 1 }
-  '
+  '; then
+    printf 'running'
+    return 0
+  fi
+  printf 'not-running'
 }
 
 wait_for_exit() {  # <timeout-seconds>
@@ -110,7 +114,10 @@ wait_for_exit() {  # <timeout-seconds>
   deadline=$(($(date +%s) + timeout))
   while :; do
     ! target_exists && return 0
-    ! harness_running && return 0
+    case "$(harness_process_state)" in
+      not-running) return 0 ;;
+      running|unknown) ;;
+    esac
     now=$(date +%s)
     [ "$now" -lt "$deadline" ] || return 1
     sleep "$POLL_INTERVAL"
@@ -248,7 +255,19 @@ cleanup_and_respawn() {
   esac
 }
 
-if target_exists && harness_running; then
+if target_exists; then
+  PROCESS_STATE=$(harness_process_state)
+  if [ "$PROCESS_STATE" != running ] && [ "$SKIP_STOW" -ne 1 ]; then
+    case "$PROCESS_STATE" in
+      unknown)
+        echo "error: $ID endpoint is live, but the $HARNESS_CMD foreground process state is unknown; aborting before stow/exit/cleanup. Rerun with --skip-stow only if the lane is already stowed or safe to restart." >&2
+        ;;
+      *)
+        echo "error: $ID endpoint is live, but the foreground process does not match $HARNESS_CMD; aborting before stow/exit/cleanup. Rerun with --skip-stow only if the lane is already stowed or safe to restart." >&2
+        ;;
+    esac
+    exit 1
+  fi
   if [ "$SKIP_STOW" -eq 1 ]; then
     echo "restart: skipping stow confirmation for $ID, then sending raw harness exit (timeout ${TIMEOUT}s)"
   else
@@ -273,11 +292,7 @@ if target_exists && harness_running; then
     fi
   fi
 else
-  if target_exists; then
-    echo "restart: $ID endpoint is live but no $HARNESS_CMD foreground process is running; respawning"
-  else
-    echo "restart: $ID endpoint is already dead; respawning"
-  fi
+  echo "restart: $ID endpoint is already dead; respawning"
 fi
 
 cleanup_and_respawn
