@@ -3,8 +3,8 @@
 #
 # A send that cannot be tied to a recorded task/lane or to an explicit
 # well-formed backend target must fail loudly. These tests pin the historical
-# silent-fallback failures: bare ids, missing FM_HOME, unresolved selectors,
-# prefixless herdr pane ids, and the healthy fm-<id> path.
+# silent-fallback failures: missing FM_HOME, unresolved selectors, prefixless
+# herdr pane ids, dead explicit endpoints, and the healthy exact/fm-id paths.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -70,19 +70,19 @@ setup_home() {  # <name> -> echoes home dir
   printf '%s\n' "$home"
 }
 
-test_bare_lane_id_fails_with_suggestion() {
-  local dir fb home err log rc
-  dir="$TMP_ROOT/bare"; mkdir -p "$dir"
-  fb=$(make_stubs "$dir"); home=$(setup_home bare); err="$dir/send.err"; log="$dir/tmux.log"; : > "$log"
+test_exact_lane_id_send_still_works() {
+  local dir fb home err log rc got
+  dir="$TMP_ROOT/exact"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); home=$(setup_home exact); err="$dir/send.err"; log="$dir/tmux.log"; : > "$log"
   fm_write_meta "$home/state/mpf-lane-m8.meta" "window=sess:fm-mpf-lane-m8" "kind=ship"
 
   PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \
     "$SEND" mpf-lane-m8 "lost dispatch" >/dev/null 2>"$err"; rc=$?
-  [ "$rc" -ne 0 ] || fail "bare lane id should fail"
-  assert_contains "$(cat "$err")" "did you mean fm-mpf-lane-m8?" "bare id diagnostic should suggest the fm- prefix"
-  assert_contains "$(cat "$err")" "$home/state/mpf-lane-m8.meta" "bare id diagnostic should name the checked meta path"
-  [ ! -s "$log" ] || fail "bare lane id fell through to tmux send"$'\n'"$(cat "$log")"
-  pass "fm-send strict: bare task/lane id fails with a did-you-mean fm-<id> diagnostic"
+  expect_code 0 "$rc" "exact task id send should succeed when metadata exists"
+  got=$(cat "$log")
+  assert_contains "$got" "target=sess:fm-mpf-lane-m8 literal=1 arg=lost dispatch" "exact id should type literal text to the meta target"
+  assert_contains "$got" "target=sess:fm-mpf-lane-m8 literal=0 arg=Enter" "exact id should submit with Enter"
+  pass "fm-send strict: exact task/lane ids resolve through home metadata"
 }
 
 test_unset_fm_home_fails() {
@@ -160,7 +160,7 @@ test_healthy_fm_id_send_still_works() {
   pass "fm-send strict: healthy fm-<id> sends still type once and submit"
 }
 
-test_bare_lane_id_fails_with_suggestion
+test_exact_lane_id_send_still_works
 test_unset_fm_home_fails
 test_unresolvable_target_does_not_tmux_fallback
 test_prefixless_herdr_pane_id_fails

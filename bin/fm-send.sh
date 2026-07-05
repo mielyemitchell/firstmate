@@ -92,6 +92,7 @@ fm_send_resolve_target() {  # <raw-target>
   TARGET_HARNESS=""
   EXPECTED_LABEL=""
   TARGET_META=""
+  TARGET_SELECTOR=""
   RESOLUTION_TRIED=""
 
   meta=$(fm_backend_meta_for_selector "$raw" "$STATE" 2>/dev/null || true)
@@ -108,8 +109,17 @@ fm_send_resolve_target() {  # <raw-target>
     TARGET_META=$meta
     TARGET_HARNESS=$(fm_meta_get "$meta" harness)
     EXPECTED_LABEL=$(fm_backend_expected_label_of_selector "$raw" "$STATE")
+    TARGET_SELECTOR=1
     return 0
   fi
+
+  case "$raw" in
+    fm-*)
+      RESOLUTION_TRIED="meta=$STATE/$raw.meta; legacy-meta=$STATE/${raw#fm-}.meta; backend=none"
+      echo "error: no metadata for $raw in $STATE (tried $RESOLUTION_TRIED); pass a well-formed explicit backend target only when targeting outside this firstmate home" >&2
+      return 1
+      ;;
+  esac
 
   pane_meta=$(fm_send_meta_for_key_value "$STATE" herdr_pane_id "$raw" 2>/dev/null || true)
   if [ -n "$pane_meta" ]; then
@@ -118,6 +128,21 @@ fm_send_resolve_target() {  # <raw-target>
     id=$(fm_send_id_from_meta "$pane_meta")
     echo "error: target '$raw' matches herdr_pane_id in $pane_meta but is missing its herdr session prefix; expected <herdr-session>:<pane-id> such as '$hint' or use 'fm-$id' (tried meta=$STATE/$raw.meta; backend=herdr)" >&2
     return 1
+  fi
+
+  meta=$(fm_backend_meta_for_window "$raw" "$STATE" 2>/dev/null || true)
+  if [ -n "$meta" ]; then
+    target=$(fm_backend_target_of_meta "$meta")
+    if [ -z "$target" ]; then
+      echo "error: no backend target recorded in $meta (tried explicit target '$raw' via recorded window/terminal; backend=from-meta)" >&2
+      return 1
+    fi
+    RESOLVED_TARGET=$target
+    TARGET_BACKEND=$(fm_backend_of_meta "$meta")
+    TARGET_META=$meta
+    TARGET_HARNESS=$(fm_meta_get "$meta" harness)
+    RESOLUTION_TRIED="explicit target '$raw' matched $meta; backend=$TARGET_BACKEND"
+    return 0
   fi
 
   case "$raw" in
@@ -156,7 +181,7 @@ fm_backend_validate "$TARGET_BACKEND" || exit 1
 # An explicit backend target (the escape hatch for endpoints outside this home)
 # and any crewmate/scout target are left unmarked, and so is the --key path.
 MARK_PREFIX=""
-if [ -n "$TARGET_META" ] && grep -q '^kind=secondmate$' "$TARGET_META" 2>/dev/null; then
+if [ -n "$TARGET_SELECTOR" ] && [ -n "$TARGET_META" ] && grep -q '^kind=secondmate$' "$TARGET_META" 2>/dev/null; then
   MARK_PREFIX="$FM_FROMFIRST_MARK"
 fi
 
