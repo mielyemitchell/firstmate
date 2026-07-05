@@ -127,7 +127,9 @@ make_crewmate_worktree_dir() {
 
 run_hook() {
   local dir=$1 stop_active=$2
-  printf '{"stop_hook_active":%s}' "$stop_active" | bash "$dir/bin/fm-turnend-guard.sh" 2>&1
+  printf '{"stop_hook_active":%s}' "$stop_active" \
+    | env -u FM_HOME -u FM_ROOT_OVERRIDE -u FM_STATE_OVERRIDE -u FM_DATA_OVERRIDE -u FM_CONFIG_OVERRIDE \
+      bash "$dir/bin/fm-turnend-guard.sh" 2>&1
 }
 
 nonexistent_pid() {
