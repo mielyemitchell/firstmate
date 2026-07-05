@@ -63,11 +63,11 @@ HARNESS=$(fm_meta_get "$META" harness)
 EXPECTED_LABEL="fm-$ID"
 
 fm_backend_validate_spawn "$BACKEND" >/dev/null || exit 1
-fm_backend_source "$BACKEND" || exit 1
 case "$BACKEND" in
   tmux|herdr) ;;
   *) echo "error: fm-restart supports secondmate lanes on tmux/herdr only for now; $ID uses backend=$BACKEND" >&2; exit 1 ;;
 esac
+fm_backend_source "$BACKEND" || exit 1
 
 harness_command() {
   local h=$1 cmd
