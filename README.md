@@ -42,7 +42,7 @@ This is.. a directory that turns any agent into your firstmate, and you the capt
 - **One liaison** - you talk only to the first mate; it dispatches, supervises, escalates only real decisions, and reports plain outcomes.
 - **A visible crew** - every crewmate works in its own tmux window, experimental herdr/zellij tab, cmux workspace, or Orca terminal you can watch or type into; the first mate reconciles.
 - **Disposable worktrees** - each task runs in a clean [treehouse](https://github.com/kunchenguid/treehouse) git worktree, or an Orca-managed worktree when `backend=orca`, so parallel work on one repo never collides.
-- **Two task shapes** - ship tasks deliver a change; scout tasks investigate, plan, reproduce, or audit and leave a report.
+- **Three task shapes** - ship tasks deliver a change; scout tasks investigate, plan, reproduce, or audit and leave a report; campaign tasks drive a committed multi-slice roadmap from one long-lived crewmate.
 - **Explicit project modes** - each project ships via `no-mistakes`, `direct-PR`, or `local-only`, with an optional `+yolo` autonomy flag.
 - **Optional secondmates** - opt in to persistent domain supervisors that run from isolated firstmate homes with their own `FM_HOME`, state, projects, and session lock, kept on the primary firstmate version by guarded local fast-forwards.
 - **Event-driven, zero-token supervision** - a bash watcher sleeps on the fleet and wakes the first mate only when something needs you; on Claude, a primary turn-end hook also blocks a blind stop when work is in flight and supervision is not live.
@@ -103,7 +103,9 @@ Setup guides for tmux (the default) and every other supported backend (herdr, ze
      │
      ├─ ship: project mode ► PR/local merge ► teardown
      │
-     └─ scout: report at data/<id>/report.md ► relay findings ► teardown
+     ├─ scout: report at data/<id>/report.md ► relay findings ► teardown
+     │
+     └─ campaign: roadmap slices ► batch PR/local merge ► teardown at roadmap close
 ```
 
 You chat with the first mate.
@@ -117,11 +119,11 @@ Full architecture - the supervision engine, worktree isolation, secondmates, dis
 Firstmate ships these user-invocable built-in skills.
 Claude and grok use the slash form shown here; codex uses the same names with `$`, such as `$afk`.
 
-| Skill              | What it does                                                                                                                                  |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Skill              | What it does                                                                                                                                                                                      |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/afk`             | Enter away-mode supervision: the sub-supervisor self-handles routine wakes in bash and escalates only captain-relevant events as one batched digest, cutting supervision cost while you step away |
-| `/updatefirstmate` | Self-update the running firstmate and its secondmates to the latest from origin with fast-forward-only pulls, then re-read instructions and nudge secondmates |
-| `/stow`            | Sweep the session for uncaptured durable knowledge, route each finding to its disk home per AGENTS.md, file undone next steps to the backlog, and report what is now safe to reset |
+| `/updatefirstmate` | Self-update the running firstmate and its secondmates to the latest from origin with fast-forward-only pulls, then re-read instructions and nudge secondmates                                     |
+| `/stow`            | Sweep the session for uncaptured durable knowledge, route each finding to its disk home per AGENTS.md, file undone next steps to the backlog, and report what is now safe to reset                |
 
 Agent-only reference skills live under `.agents/skills/` and are loaded by firstmate at the trigger points named in [`AGENTS.md`](AGENTS.md).
 

@@ -168,7 +168,7 @@ Otherwise it prints one line per problem or capability fact; handle each:
 - `CREW_HARNESS_OVERRIDE: <name>` - record and use the override silently; surface a harness fact only if it actually blocks work or the captain asks.
 - `CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>` - the optional dispatch profile file exists but failed low-cost bootstrap validation; continue with the normal fallback chain, resolve and pass the chosen fallback harness explicitly while the file remains present, fix the JSON, unverified harness name, or invalid harness/effort pair when convenient, and do not select a bad profile.
 - `CREW_DISPATCH: active config/crew-dispatch.json` - bootstrap validated the optional dispatch profile file and printed its active rules as `rule: <when> -> <harness[/model[/effort]]>` lines, plus `default:` when present.
-  Keep this block top-of-mind during intake; it is the reminder that every crewmate or scout dispatch must consult the rules before spawning.
+  Keep this block top-of-mind during intake; it is the reminder that every ship, scout, or campaign dispatch must consult the rules before spawning.
 - `FLEET_SYNC: <repo>: skipped: <reason>` - a benign one-off skip (offline, no origin, local-only); bootstrap continued, investigate only if it blocks work.
 - `FLEET_SYNC: <repo>: recovered: <detail>` - the clone had drifted onto a clean detached HEAD holding no unique commits and the sync self-healed it (re-attached the default branch and fast-forwarded); no action needed, it is reported only so the self-heal is visible.
 - `FLEET_SYNC: <repo>: STUCK: on <state>, N commits behind <base> - needs attention` - the clone is dirty, on a non-default branch, detached with unique commits, or diverged, so the sync left it untouched (never forcing or discarding); it will keep falling behind until you look. A loud STUCK, especially a growing N across bootstraps, means that clone needs hands-on attention; dispatch a crewmate or resolve it before it strands work.
@@ -239,7 +239,7 @@ Per rule, `when` and `use` are required, and `use.harness` is required.
 `default` is optional.
 An omitted model or effort means the selected harness uses its own default for that axis.
 
-When `config/crew-dispatch.json` is present, read it during intake before every crewmate or scout dispatch.
+When `config/crew-dispatch.json` is present, read it during intake before every ship, scout, or campaign dispatch.
 Pick the single best-fit rule using your own judgment.
 This is explicitly not first-match: weigh all rules, their `when` text, and their `why` rationales against the actual task.
 Resolve the chosen rule's `use` object into a concrete profile `(harness, model, effort)` and pass it to `bin/fm-spawn.sh` with explicit `--harness`, `--model`, and `--effort` flags for the axes that are set.
@@ -737,7 +737,7 @@ Two further guards prevent the tangle upstream: `fm-spawn` refuses to launch unl
 
 On the `claude` harness, "no turn ends blind" has a structural backstop beyond the pull-based `fm-guard.sh` banner: `bin/fm-turnend-guard.sh`, a Claude Code Stop hook registered in the tracked `.claude/settings.json`, fires on every primary turn end and, when tasks are in flight without a live identity-matched watcher lock and fresh beacon, blocks the stop (exit 2 with a reason) so the turn cannot end without acting on it first.
 It shares status fields with `fm-guard.sh` via `bin/fm-supervision-lib.sh`, uses `bin/fm-wake-lib.sh` for live watcher lock health, and never blocks more than once per turn (Claude Code's own `stop_hook_active` loop-guard field lets it always allow the retry).
-It is scoped to fire only in the actual primary checkout - never in a crewmate/scout worktree or a secondmate home - and stays silent when supervision is healthy.
+It is scoped to fire only in the actual primary checkout - never in a crewmate/scout/campaign worktree or a secondmate home - and stays silent when supervision is healthy.
 See `docs/turnend-guard.md` for the verified Stop-hook mechanism and the scoping details.
 This backstop exists only for `claude` today; other harnesses still rely on the pull-based guard alone (future work, same empirical-verification-first pattern as every other harness fact in `harness-adapters`).
 Watcher liveness is not enough if you are foreground-blocked.

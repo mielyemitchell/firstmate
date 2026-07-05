@@ -29,7 +29,7 @@ A pull-based guard (`bin/fm-guard.sh`) warns through supervision tool output if 
 The drain script calls that guard after emptying the queue, which avoids repeating the queued-wakes warning for records it just consumed while still warning on stale watcher liveness.
 It leads with prominent bordered banners for the tangle and no-watcher cases so they cannot be skimmed past.
 On the `claude` harness, a tracked project Stop hook (`bin/fm-turnend-guard.sh`) gives the primary session a push-based backstop: when work is in flight and no identity-matched watcher lock with a fresh beacon is live, Claude Code receives the hook's exit-2 reason and must continue the turn before it can stop.
-The hook is scoped out of secondmate homes and crewmate/scout worktrees, allows Claude's own `stop_hook_active` retry, and is documented in [turnend-guard.md](turnend-guard.md).
+The hook is scoped out of secondmate homes and crewmate/scout/campaign worktrees, allows Claude's own `stop_hook_active` retry, and is documented in [turnend-guard.md](turnend-guard.md).
 
 A presence-gated sub-supervisor (`bin/fm-supervise-daemon.sh`) extends this for walk-away supervision: the `/afk` skill activates it, after which the watcher reverts to daemon-managed one-shot mode and the daemon self-handles routine wakes in bash.
 The watcher and daemon share `bin/fm-classify-lib.sh` for captain-relevant status verbs and status-scan primitives.
@@ -63,7 +63,7 @@ cmux's container shape is one workspace per task with one surface, no per-home c
 ## Worktrees, not branches in your checkout
 
 Crewmates never intentionally touch your project clone; [treehouse](https://github.com/kunchenguid/treehouse) pools clean worktrees for tmux, herdr, zellij, and cmux tasks, while Orca creates its own worktrees for `backend=orca`.
-For ship and scout work, `fm-spawn.sh` refuses to launch unless the resolved task path is a real git worktree root that is distinct from the project primary checkout.
+For ship, scout, and campaign work, `fm-spawn.sh` refuses to launch unless the resolved task path is a real git worktree root that is distinct from the project primary checkout.
 
 The firstmate repo has one extra exposure because it can dispatch crewmates to work on itself.
 Its operating checkout (`FM_ROOT`) and the disposable crewmate worktrees are all linked git worktrees of the same repository, so the valid discriminator is branch state, not whether the checkout is linked.
@@ -75,17 +75,17 @@ Only a named non-default branch checked out in `FM_ROOT` is a worktree tangle.
 If another live session holds the fleet lock, both surfaces keep the alarm but switch to read-only wording with no repair command.
 Ship briefs also tell the crewmate to verify `pwd -P` and `git rev-parse --show-toplevel` before creating `fm/<id>`, then stop with a blocked status if it landed in the primary checkout.
 
-## Two task shapes
+## Three task shapes
 
-Ship tasks change projects and ship by project mode (`no-mistakes`, `direct-PR`, or `local-only`); scout tasks investigate, plan, reproduce bugs, or audit, then leave a report at `data/<id>/report.md` and never push.
+Ship tasks change projects and ship by project mode (`no-mistakes`, `direct-PR`, or `local-only`); scout tasks investigate, plan, reproduce bugs, or audit, then leave a report at `data/<id>/report.md` and never push; campaign tasks drive one long-lived crewmate through a finished committed roadmap or upstream spec across several serially-dependent slices or batches, and are teardown-protected like ship tasks rather than scratch like scout tasks.
 
 ## Dispatch profiles
 
-Crewmate and scout dispatch can stay on the static crewmate harness resolved by `config/crew-harness`, or it can use local dispatch profiles in `config/crew-dispatch.json`.
+Ship, scout, and campaign dispatch can stay on the static crewmate harness resolved by `config/crew-harness`, or it can use local dispatch profiles in `config/crew-dispatch.json`.
 The dispatch file is intentionally judgment-based: firstmate reads the natural-language rules at intake, chooses the best matching profile, and passes only concrete `--harness`, `--model`, and `--effort` axes to `fm-spawn.sh`.
 The shell scripts validate the JSON shape and verified harness/effort combinations, but they do not parse task intent or match the natural-language rules.
 The session-start bootstrap step surfaces either the active rule block or a concise invalid-config line at startup.
-When the file exists, `fm-spawn.sh` refuses crewmate and scout launches without an explicit harness, so `config/crew-harness` is only automatic when no dispatch profile file is active.
+When the file exists, `fm-spawn.sh` refuses ship, scout, or campaign launches without an explicit harness, so `config/crew-harness` is only automatic when no dispatch profile file is active.
 Secondmate launches are exempt because they resolve the secondmate harness and any optional secondmate model or effort tokens instead.
 Unsupported effort values are still recorded in task meta when passed to `fm-spawn.sh`, but the launch template omits any effort flag that the selected harness does not accept.
 That keeps spawn launch compatible across claude, codex, grok, pi, and opencode while preserving the requested profile for later audit.
@@ -147,6 +147,7 @@ PR-head containment covers an exact PR head match, a local `HEAD` that is an anc
 GitHub lookup errors fall back to the content check and still refuse if that check is inconclusive.
 If no `pr=` was ever recorded, teardown can still discover a merged PR by matching the worktree branch name and fetching `refs/pull/<n>/head` when the head branch was deleted.
 Those PR-head and content checks let a squash-merged PR whose head branch was deleted tear down cleanly without using `--force`; `local-only` work instead tears down after the approved local default-branch merge or after the branch is pushed to any remote.
+Campaign tasks (`kind=campaign`) get the same fail-closed protection extended across every local branch under the task's `fm/<id>` prefix, not just `HEAD`: teardown verifies each `fm/<id>`-prefixed branch by the same landed-work standard - a PR-based campaign's earlier batch branches are looked up against their own merged PR rather than the task's last-recorded `pr=`, since `fm-pr-check.sh` only ever records the final batch's PR - refuses by branch name if any batch is unlanded, and deletes every `fm/<id>`-prefixed branch once all of them have landed so the pooled clone accumulates no orphaned refs.
 
 ## Optional X mode
 

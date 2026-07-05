@@ -18,7 +18,7 @@
 #
 # Ships as the TRACKED .claude/settings.json at the repo root, so this file is
 # checked out into every worktree of this repo: the primary checkout, any
-# crewmate/scout task worktree spawned to work on firstmate itself (the
+# crewmate/scout/campaign task worktree spawned to work on firstmate itself (the
 # recursive "firstmate improving itself" case), and every secondmate home
 # (treehouse-leased or git-cloned). It must therefore scope itself to the
 # PRIMARY at runtime and stay a silent, fast no-op everywhere else.
@@ -56,7 +56,7 @@ STOP_HOOK_ACTIVE=$(printf '%s' "$PAYLOAD" | jq -r '.stop_hook_active // false' 2
 # --- scope precisely to the PRIMARY checkout --------------------------------
 # Excludes secondmate homes (the .fm-secondmate-home marker is written at seed
 # time regardless of whether the home was treehouse-leased or git-cloned; see
-# bin/fm-home-seed.sh) and ordinary crewmate/scout task worktrees of
+# bin/fm-home-seed.sh) and ordinary crewmate/scout/campaign task worktrees of
 # firstmate-on-itself (bin/fm-spawn.sh only ever hands those out as genuine
 # linked `git worktree`s - it aborts the spawn otherwise - so a plain,
 # non-worktree checkout is never one of those). A linked worktree's git-dir

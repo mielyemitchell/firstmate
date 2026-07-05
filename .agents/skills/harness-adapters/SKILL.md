@@ -11,7 +11,7 @@ metadata:
 Use this reference before any harness-specific firstmate operation: spawn, recovery, trust-dialog handling, skill invocation, interrupt, exit, resume, or adapter verification.
 
 Crewmates default to the same harness firstmate is running on unless `config/crew-harness` records an adapter name.
-Optional dispatch profiles in `config/crew-dispatch.json` can override that static default for one crewmate or scout dispatch by selecting concrete harness, model, and effort axes at intake.
+Optional dispatch profiles in `config/crew-dispatch.json` can override that static default for one ship, scout, or campaign dispatch by selecting concrete harness, model, and effort axes at intake.
 The captain may override that file at session start or later; a per-task instruction such as "run this one on codex" overrides it for that dispatch only.
 `default` means mirror firstmate's own harness.
 
@@ -37,7 +37,7 @@ If the captain asks for a new harness, propose verifying it first: spawn a trivi
 `bin/fm-harness.sh` prints firstmate's own harness, using verified env markers first and then process ancestry.
 `bin/fm-harness.sh crew` resolves the effective crewmate harness from `config/crew-harness` (absent or `default` -> own).
 `bin/fm-harness.sh secondmate` resolves the secondmate-launch harness through the chain `config/secondmate-harness` -> `config/crew-harness` -> own, so an unset `config/secondmate-harness` matches the crew harness.
-`bin/fm-spawn.sh` uses `crew` mode for a crewmate/scout launch and `secondmate` mode for a `--secondmate` launch, re-resolving on every spawn so the split is durable across respawns; an explicit per-spawn harness arg overrides either.
+`bin/fm-spawn.sh` uses `crew` mode for a ship/scout/campaign launch and `secondmate` mode for a `--secondmate` launch, re-resolving on every spawn so the split is durable across respawns; an explicit per-spawn harness arg overrides either.
 On `unknown`, ask the captain instead of guessing.
 A captain override always beats detection.
 When verifying a new adapter, record its env marker and command name in `bin/fm-harness.sh`.
@@ -51,13 +51,13 @@ Use that value for interrupt, exit, resume, and skill-invocation facts.
 Do not make the shell scripts parse or match natural-language dispatch rules.
 The supported launch-profile flags below were verified locally on 2026-06-30 with each CLI's help and parser path.
 
-| Harness | Model flag | Effort flag | Notes |
-|---|---|---|---|
-| claude | `--model <model>` | `--effort <low\|medium\|high\|xhigh\|max>` | Verified on Claude Code 2.1.196. |
-| codex | `--model <model>` | `-c 'model_reasoning_effort="<low\|medium\|high\|xhigh>"'` | Verified on codex-cli 0.142.1. The installed binary schema contains `model_reasoning_effort`, the active config uses it, and the bundled model catalog advertises only low/medium/high/xhigh. `max` is omitted. |
-| grok | `--model <model>` | `--reasoning-effort <low\|medium\|high\|xhigh>` | Verified on grok 0.2.73. `--effort` parses too, but firstmate's profile axis is reasoning effort. `--reasoning-effort max` is rejected, so `max` is omitted. |
-| pi | `--model <model>` | `--thinking <low\|medium\|high\|xhigh>` | Verified on pi 0.80.2. `max` prints an invalid-thinking warning, so firstmate omits Pi effort when the requested effort is `max`. |
-| opencode | `--model <provider/model>` | none for firstmate's interactive launch | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag. |
+| Harness  | Model flag                 | Effort flag                                                | Notes                                                                                                                                                                                                           |
+| -------- | -------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| claude   | `--model <model>`          | `--effort <low\|medium\|high\|xhigh\|max>`                 | Verified on Claude Code 2.1.196.                                                                                                                                                                                |
+| codex    | `--model <model>`          | `-c 'model_reasoning_effort="<low\|medium\|high\|xhigh>"'` | Verified on codex-cli 0.142.1. The installed binary schema contains `model_reasoning_effort`, the active config uses it, and the bundled model catalog advertises only low/medium/high/xhigh. `max` is omitted. |
+| grok     | `--model <model>`          | `--reasoning-effort <low\|medium\|high\|xhigh>`            | Verified on grok 0.2.73. `--effort` parses too, but firstmate's profile axis is reasoning effort. `--reasoning-effort max` is rejected, so `max` is omitted.                                                    |
+| pi       | `--model <model>`          | `--thinking <low\|medium\|high\|xhigh>`                    | Verified on pi 0.80.2. `max` prints an invalid-thinking warning, so firstmate omits Pi effort when the requested effort is `max`.                                                                               |
+| opencode | `--model <provider/model>` | none for firstmate's interactive launch                    | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag.                                                |
 
 When a requested effort value is outside the harness-specific accepted set, `fm-spawn` records the requested `effort=` in meta but emits no effort flag for that harness.
 This preserves launch success instead of passing a known-bad value.
@@ -75,12 +75,12 @@ Natural language is acceptable if uncertain.
 
 ## claude (VERIFIED)
 
-| Fact | Value |
-|---|---|
-| Busy-pane signature | `esc to interrupt` |
-| Exit command | `/exit` |
-| Interrupt | single Escape |
-| Skill invocation | `/<skill>` (e.g. `/no-mistakes`) |
+| Fact                | Value                            |
+| ------------------- | -------------------------------- |
+| Busy-pane signature | `esc to interrupt`               |
+| Exit command        | `/exit`                          |
+| Interrupt           | single Escape                    |
+| Skill invocation    | `/<skill>` (e.g. `/no-mistakes`) |
 
 First launch in a fresh worktree, or first ever on a machine, may show a trust or bypass-permissions confirmation.
 After every spawn, peek the pane within about 20 seconds.
@@ -103,12 +103,12 @@ After those settings are loaded, hook command resolution is still cwd-sensitive 
 
 ## codex (VERIFIED 2026-06-11, codex-cli 0.139.0)
 
-| Fact | Value |
-|---|---|
-| Busy-pane signature | `esc to interrupt` (shown as `• Working (Xs • esc to interrupt)`) |
-| Exit command | `/quit` (slash popup needs about 1 second between text and Enter; `fm-send` handles it) |
-| Interrupt | single Escape |
-| Skill invocation | `$<skill>` (e.g. `$no-mistakes`); `/<skill>` is claude-only and codex rejects it as "Unrecognized command" |
+| Fact                | Value                                                                                                      |
+| ------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Busy-pane signature | `esc to interrupt` (shown as `• Working (Xs • esc to interrupt)`)                                          |
+| Exit command        | `/quit` (slash popup needs about 1 second between text and Enter; `fm-send` handles it)                    |
+| Interrupt           | single Escape                                                                                              |
+| Skill invocation    | `$<skill>` (e.g. `$no-mistakes`); `/<skill>` is claude-only and codex rejects it as "Unrecognized command" |
 
 A `$<skill>` invocation opens a `$`-autocomplete (skill) popup, the same hazard as the `/` slash popup: submitting too fast lets the popup swallow the Enter, so the invocation never lands.
 `fm-send` handles it the same way it handles `/` - it gives the popup a longer settle (1.2s) between typing and the first Enter, with the target backend's submit retry as the safety net - but the `$` settle is scoped to `harness=codex`, read from the target's `state/<id>.meta`.
@@ -125,11 +125,11 @@ The session id is printed on quit.
 
 ## opencode (VERIFIED 2026-06-11, v1.15.7-1.17.3)
 
-| Fact | Value |
-|---|---|
-| Busy-pane signature | `esc interrupt` (dotted spinner footer; note no "to") |
-| Exit command | `/exit` |
-| Interrupt | double Escape; known flaky while a long shell command runs, so a wedged pane may need `/exit` and relaunch |
+| Fact                | Value                                                                                                      |
+| ------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Busy-pane signature | `esc interrupt` (dotted spinner footer; note no "to")                                                      |
+| Exit command        | `/exit`                                                                                                    |
+| Interrupt           | double Escape; known flaky while a long shell command runs, so a wedged pane may need `/exit` and relaunch |
 
 No trust dialog.
 Opencode can auto-upgrade itself in the background and the running TUI can exit mid-task, observed live from 1.15.7 to 1.17.3.
@@ -138,11 +138,11 @@ If a pane shows the exit banner, relaunch with `--continue` to resume the sessio
 
 ## pi (VERIFIED 2026-06-11)
 
-| Fact | Value |
-|---|---|
+| Fact                | Value                                                             |
+| ------------------- | ----------------------------------------------------------------- |
 | Busy-pane signature | `Working...` (braille spinner prefix; no `esc to interrupt` text) |
-| Exit command | `/quit` |
-| Interrupt | single Escape |
+| Exit command        | `/quit`                                                           |
+| Interrupt           | single Escape                                                     |
 
 Pi has no permission system, so crewmates are always autonomous.
 Keep the brief as one positional argument.
@@ -161,15 +161,15 @@ Pi sets `PI_CODING_AGENT=true` for its children; this is its harness-detection e
 Grok Build TUI (`grok`), a Claude-Code-compatible CLI from xAI.
 Launch with a positional prompt: `grok --always-approve "$(cat <brief>)"`.
 
-| Fact | Value |
-|---|---|
-| Busy-pane signature | `Ctrl+c:cancel` (the mid-turn cancel hint in grok's keybind bar, shown iff a turn is running; the spinner line is a braille glyph + `<status>… N.Ns` + `[stop]`, e.g. `⠹ Thinking… 1.1s … [stop]`). Idle keybind bar shows only `Shift+Tab:mode │ Ctrl+.:shortcuts`. The ASCII `Ctrl+c:cancel` is the busy regex (avoids locale fragility of matching braille). |
-| Exit command | `Ctrl+Q` double-press within 1000ms (it is a confirmed destructive action). Prints `Resume this session with: grok --resume <session-id>`. `Ctrl+D` is the quit key in VS Code family terminals. NOT `/exit` and NOT `Ctrl+C`. |
-| Interrupt | single `Ctrl+C` (cancels the current turn; the footer shows `Ctrl+c:cancel` mid-turn). `Esc` only moves focus to the scrollback, it does NOT interrupt. |
-| Skill invocation | `/<skill>` (e.g. `/no-mistakes`), same as claude. Opens a slash-autocomplete popup, so a too-fast Enter selects the popup entry instead of sending. For an argument-taking command that first Enter does not submit at all - it expands the selection into an argument-hint placeholder in the composer (e.g. `/compact` -> `/compact compaction instructions`, live-verified), leaving real text still sitting there unsubmitted; a genuine second Enter is required. `fm-send`'s retried Enter lands it on BOTH backends, but only because each backend's own submit-verification correctly recognizes that placeholder-filled text as still-pending - see the incident below. |
-| Autonomy | `--always-approve` (footer shows `· always-approve`); auto-approves every tool execution, verified to run fully unattended. `--permission-mode bypassPermissions` is the stronger equivalent. |
-| Env marker | `GROK_AGENT=1`, set for child/tool processes. grok does NOT set `CLAUDECODE` despite Claude compatibility, so the marker is unambiguous. |
-| Resume | `grok --resume <session-id>` (id printed on exit) or `grok -c` / `--continue` (most recent for the cwd); `--fork-session` branches a new session id. |
+| Fact                | Value                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Busy-pane signature | `Ctrl+c:cancel` (the mid-turn cancel hint in grok's keybind bar, shown iff a turn is running; the spinner line is a braille glyph + `<status>… N.Ns` + `[stop]`, e.g. `⠹ Thinking… 1.1s … [stop]`). Idle keybind bar shows only `Shift+Tab:mode │ Ctrl+.:shortcuts`. The ASCII `Ctrl+c:cancel` is the busy regex (avoids locale fragility of matching braille).                                                                                                                                                                                                                                                                                                                  |
+| Exit command        | `Ctrl+Q` double-press within 1000ms (it is a confirmed destructive action). Prints `Resume this session with: grok --resume <session-id>`. `Ctrl+D` is the quit key in VS Code family terminals. NOT `/exit` and NOT `Ctrl+C`.                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Interrupt           | single `Ctrl+C` (cancels the current turn; the footer shows `Ctrl+c:cancel` mid-turn). `Esc` only moves focus to the scrollback, it does NOT interrupt.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Skill invocation    | `/<skill>` (e.g. `/no-mistakes`), same as claude. Opens a slash-autocomplete popup, so a too-fast Enter selects the popup entry instead of sending. For an argument-taking command that first Enter does not submit at all - it expands the selection into an argument-hint placeholder in the composer (e.g. `/compact` -> `/compact compaction instructions`, live-verified), leaving real text still sitting there unsubmitted; a genuine second Enter is required. `fm-send`'s retried Enter lands it on BOTH backends, but only because each backend's own submit-verification correctly recognizes that placeholder-filled text as still-pending - see the incident below. |
+| Autonomy            | `--always-approve` (footer shows `· always-approve`); auto-approves every tool execution, verified to run fully unattended. `--permission-mode bypassPermissions` is the stronger equivalent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Env marker          | `GROK_AGENT=1`, set for child/tool processes. grok does NOT set `CLAUDECODE` despite Claude compatibility, so the marker is unambiguous.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Resume              | `grok --resume <session-id>` (id printed on exit) or `grok -c` / `--continue` (most recent for the cwd); `--fork-session` branches a new session id.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 **Incident (2026-07-03, herdr backend only, grok 0.2.82):** two grok/herdr crewmates were sent `/no-mistakes` via `fm-send`; both left it fully typed but unsubmitted in the composer for minutes (footer still `Enter:send`), and `fm-send` exited 0 with no error.
 Reproduced live: the herdr adapter's submit-verification at the time treated ANY pane-content change after Enter as "submitted", and the popup-close-with-placeholder-fill described above IS a visible content change even though nothing was actually sent.
