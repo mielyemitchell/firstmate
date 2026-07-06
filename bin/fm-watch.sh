@@ -43,6 +43,9 @@ mkdir -p "$STATE"
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-freeze-lib.sh
+. "$SCRIPT_DIR/fm-freeze-lib.sh"
+fm_fleet_freeze_refuse "watch" || exit 1
 # Shared wake classifier (captain-relevant verbs + signal/stale/heartbeat
 # predicates), the SAME library the away-mode daemon uses, so the triage policy
 # has one definition.

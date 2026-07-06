@@ -233,6 +233,16 @@ else
   printf 'absent\n'
 fi
 
+subsection "FLEET FREEZE"
+FREEZE_PRESENT=0
+if [ -e "$STATE/.fleet-freeze" ]; then
+  FREEZE_PRESENT=1
+  printf 'present - spawn, send, watcher, and daemon paths refuse fleet movement.\n'
+  cat "$STATE/.fleet-freeze"
+else
+  printf 'absent\n'
+fi
+
 # --- 6. closing reminder -----------------------------------------------
 section "NEXT STEP"
 if [ "$READ_ONLY" -eq 1 ]; then
@@ -246,6 +256,12 @@ elif [ "$AFK_PRESENT" -eq 1 ]; then
   cat <<'EOF'
 Away mode is active. Do not arm the normal watcher directly; load /afk and
 ensure the daemon is running, because the daemon owns watcher supervision.
+
+EOF
+elif [ "$FREEZE_PRESENT" -eq 1 ]; then
+  cat <<'EOF'
+Fleet freeze is active. Stay in orchestration/diagnosis mode unless the captain
+explicitly unfreezes or approves a one-command bypass.
 
 EOF
 elif [ -f "$CONFIG/x-mode.env" ]; then

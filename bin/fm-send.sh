@@ -42,7 +42,10 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-marker-lib.sh
 . "$SCRIPT_DIR/fm-marker-lib.sh"
+# shellcheck source=bin/fm-freeze-lib.sh
+. "$SCRIPT_DIR/fm-freeze-lib.sh"
 
+fm_fleet_freeze_refuse "send" || exit 1
 "$SCRIPT_DIR/fm-guard.sh" || true
 
 RAW_TARGET=$1
