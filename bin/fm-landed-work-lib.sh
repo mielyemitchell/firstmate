@@ -4,6 +4,15 @@
 # The safety contract mirrors fm-teardown.sh: uncommitted changes are never
 # landed, commits reachable from any remote-tracking branch are landed, and
 # local-only work may also be landed on the local default branch.
+#
+# Task kind carve-outs also mirror fm-teardown.sh. A kind=secondmate record is
+# never assessed as cleanable here: secondmate retirement is an explicit,
+# captain/firstmate-gated decision (AGENTS.md section 7) with its own in-flight
+# check and registry removal that this shared assessor cannot perform, so it
+# always reports blocked and points at bin/fm-teardown.sh. A kind=scout
+# worktree is deliberately left dirty/scratch; teardown's carve-out ignores its
+# dirty/unpushed state entirely and gates only on the report existing, so this
+# assessor does the same.
 
 fm_landed_default_branch() {  # <repo>
   local repo=$1 ref branch
@@ -39,9 +48,24 @@ fm_landed_content_in_default() {  # <worktree> <project>
   [ "$merged_tree" = "$default_tree" ]
 }
 
-fm_landed_assess_worktree() {  # <worktree> <project> <mode>
-  local wt=$1 project=$2 mode=${3:-no-mistakes}
+fm_landed_assess_worktree() {  # <worktree> <project> <mode> [<kind>] [<report>]
+  local wt=$1 project=$2 mode=${3:-no-mistakes} kind=${4:-ship} report=${5:-}
   local dirty_raw dirty unpushed_raw unpushed default unmerged_raw unmerged
+
+  if [ "$kind" = secondmate ]; then
+    printf 'blocked\tsecondmate retirement is an explicit decision; use bin/fm-teardown.sh, not stale-state cleanup\n'
+    return 1
+  fi
+
+  if [ "$kind" = scout ]; then
+    if [ -n "$report" ] && [ -f "$report" ]; then
+      printf 'landed\tscout report present at %s\n' "$report"
+      return 0
+    fi
+    printf 'unlanded\tscout report not yet written at %s\n' "${report:-<unknown>}"
+    return 1
+  fi
+
   if [ -z "$wt" ] || [ ! -d "$wt" ]; then
     printf 'landed\tno inspectable worktree path recorded\n'
     return 0

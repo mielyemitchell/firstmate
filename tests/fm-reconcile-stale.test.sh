@@ -46,8 +46,8 @@ make_git_world() {  # <case-dir>
   git -C "$case_dir/project" worktree add -q -b fm/task "$case_dir/wt" main
 }
 
-make_case() {  # <name> <live|dead>
-  local name=$1 endpoint_state=$2 case_dir rec fakebin live
+make_case() {  # <name> <live|dead> [kind]
+  local name=$1 endpoint_state=$2 kind=${3:-ship} case_dir rec fakebin live
   case_dir="$TMP_ROOT/$name"
   mkdir -p "$case_dir/home/state" "$case_dir/home/config" "$case_dir/home/data"
   make_git_world "$case_dir"
@@ -60,7 +60,7 @@ EOF
     "window=fm-task-a" \
     "worktree=$case_dir/wt" \
     "project=$case_dir/project" \
-    "kind=ship" \
+    "kind=$kind" \
     "mode=no-mistakes" \
     "tasktmp=$case_dir/fm-task-a"
   printf 'working: old event\n' > "$case_dir/home/state/task-a.status"
@@ -196,9 +196,69 @@ EOF
   pass "fm-reconcile-stale.sh --clean --yes removes only stale state records"
 }
 
+test_clean_refuses_secondmate_kind() {
+  local rec case_dir fakebin live out rc=0
+  rec=$(make_case secondmate-kind dead secondmate)
+  IFS='|' read -r case_dir fakebin live <<EOF
+$rec
+EOF
+
+  out=$(run_reconcile "$case_dir" "$fakebin" "$live" --clean task-a --yes 2>&1) || rc=$?
+
+  expect_code 1 "$rc" "secondmate cleanup"
+  assert_contains "$out" "landed=blocked" "secondmate blocked assessment missing"
+  assert_contains "$out" "bin/fm-teardown.sh" "secondmate refusal does not point at fm-teardown.sh"
+  assert_present "$case_dir/home/state/task-a.meta" "secondmate cleanup removed meta"
+
+  pass "fm-reconcile-stale.sh refuses cleanup for kind=secondmate regardless of worktree state"
+}
+
+test_clean_allows_dirty_scout_with_report() {
+  local rec case_dir fakebin live out
+  rec=$(make_case scout-with-report dead scout)
+  IFS='|' read -r case_dir fakebin live <<EOF
+$rec
+EOF
+  printf 'scratch\n' > "$case_dir/wt/scratch.txt"
+  git -C "$case_dir/wt" add scratch.txt
+  git -C "$case_dir/wt" -c user.email=t@t -c user.name=t commit -q -m scratch
+  printf 'uncommitted\n' > "$case_dir/wt/uncommitted.txt"
+  mkdir -p "$case_dir/home/data/task-a"
+  printf '# findings\n' > "$case_dir/home/data/task-a/report.md"
+
+  out=$(run_reconcile "$case_dir" "$fakebin" "$live" --clean task-a --yes)
+
+  assert_contains "$out" "cleaned stale state for task-a" "scout clean success missing"
+  assert_absent "$case_dir/home/state/task-a.meta" "meta survived scout clean"
+
+  pass "fm-reconcile-stale.sh --clean --yes allows a scout task once its report exists, ignoring scratch state"
+}
+
+test_clean_refuses_scout_without_report() {
+  local rec case_dir fakebin live out rc=0
+  rec=$(make_case scout-no-report dead scout)
+  IFS='|' read -r case_dir fakebin live <<EOF
+$rec
+EOF
+  printf 'scratch\n' > "$case_dir/wt/scratch.txt"
+  git -C "$case_dir/wt" add scratch.txt
+  git -C "$case_dir/wt" -c user.email=t@t -c user.name=t commit -q -m scratch
+
+  out=$(run_reconcile "$case_dir" "$fakebin" "$live" --clean task-a --yes 2>&1) || rc=$?
+
+  expect_code 1 "$rc" "scout cleanup without report"
+  assert_contains "$out" "landed=unlanded" "scout unlanded assessment missing"
+  assert_present "$case_dir/home/state/task-a.meta" "scout cleanup without report removed meta"
+
+  pass "fm-reconcile-stale.sh refuses cleanup for a scout task with no report yet"
+}
+
 test_dry_run_reports_stale_and_writes_nothing
 test_clean_without_yes_refuses_and_writes_nothing
 test_clean_refuses_unlanded_work
 test_clean_refuses_live_endpoint
 test_clean_respects_fleet_freeze
 test_clean_yes_removes_only_state_and_tasktmp
+test_clean_refuses_secondmate_kind
+test_clean_allows_dirty_scout_with_report
+test_clean_refuses_scout_without_report

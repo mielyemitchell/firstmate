@@ -18,6 +18,7 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 FM_STATE="$STATE"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 
 # shellcheck source=bin/fm-fleet-map-lib.sh
 . "$SCRIPT_DIR/fm-fleet-map-lib.sh"
@@ -104,11 +105,13 @@ task_work_path_from_meta() {  # <meta>
 }
 
 print_landed_assessment() {  # <id> <meta>
-  local id=$1 meta=$2 work project mode assessment rc status detail
+  local id=$1 meta=$2 work project mode kind report assessment rc status detail
   work=$(task_work_path_from_meta "$meta")
   project=$(meta_value "$meta" project)
   mode=$(meta_value "$meta" mode)
-  assessment=$(fm_landed_assess_worktree "$work" "$project" "${mode:-no-mistakes}")
+  kind=$(meta_value "$meta" kind)
+  report="$DATA/$id/report.md"
+  assessment=$(fm_landed_assess_worktree "$work" "$project" "${mode:-no-mistakes}" "${kind:-ship}" "$report")
   rc=$?
   status=${assessment%%$'\t'*}
   detail=${assessment#*$'\t'}
@@ -117,7 +120,7 @@ print_landed_assessment() {  # <id> <meta>
 }
 
 print_dry_run() {
-  local line id backend target cwd meta kind work project mode assessment status detail found=0
+  local line id backend target cwd meta kind work project mode report assessment status detail found=0
   printf 'FIRSTMATE STALE STATE RECONCILE DRY RUN\n'
   printf 'home=%s\n' "$FM_HOME"
   printf 'state=%s\n' "$STATE"
@@ -139,7 +142,8 @@ print_dry_run() {
     work=$(task_work_path_from_meta "$meta")
     project=$(meta_value "$meta" project)
     mode=$(meta_value "$meta" mode)
-    assessment=$(fm_landed_assess_worktree "$work" "$project" "${mode:-no-mistakes}")
+    report="$DATA/$id/report.md"
+    assessment=$(fm_landed_assess_worktree "$work" "$project" "${mode:-no-mistakes}" "${kind:-ship}" "$report")
     status=${assessment%%$'\t'*}
     detail=${assessment#*$'\t'}
     printf 'id=%s kind=%s backend=%s target=%s path=%s fleet_cwd=%s landed=%s detail=%s\n' \
