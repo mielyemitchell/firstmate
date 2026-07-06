@@ -78,6 +78,17 @@ Only a named non-default branch checked out in `FM_ROOT` is a worktree tangle.
 If another live session holds the fleet lock, both surfaces keep the alarm but switch to read-only wording with no repair command.
 Ship briefs also tell the crewmate to verify `pwd -P` and `git rev-parse --show-toplevel` before creating `fm/<id>`, then stop with a blocked status if it landed in the primary checkout.
 
+## Fleet freeze and stale-state reconciliation
+
+`bin/fm-freeze.sh on [reason...]` writes local `state/.fleet-freeze`; while it exists, `fm-spawn.sh`, `fm-send.sh`, `fm-watch.sh`, `fm-watch-arm.sh`, and the away-mode daemon's injection path all refuse through the shared `fm-freeze-lib.sh` guard before doing anything else, so the fleet is parked without tearing anything down.
+`fm-freeze.sh off` lifts it, `fm-freeze.sh status` reports it, and `FM_FLEET_FREEZE_BYPASS=1` bypasses it for one deliberate command.
+The session-start digest surfaces an active freeze as its own subsection and steers the next-step reminder toward orchestration/diagnosis mode instead of a normal watcher arm.
+
+Two read-mostly tools guard against firstmate's own tracked state drifting from what is actually live.
+`bin/fm-fleet-map.sh` is a read-only diagnostic: it matches every tracked `state/*.meta` record against visible Herdr agents (or other backends' endpoint liveness) by exact target then by cwd, and reports `stale-tracked` records and `operator-untracked-herdr` agents; it never mutates anything.
+`bin/fm-reconcile-stale.sh` builds on that same matching (`fm-fleet-map-lib.sh`) plus a landed-work assessor (`fm-landed-work-lib.sh`) with carve-outs for `kind=secondmate` and `kind=scout` that mirror `fm-teardown.sh`. The assessor itself is deliberately more conservative than `fm-teardown.sh` and omits its PR-head patch-id containment fallback, so use `bin/fm-teardown.sh` directly for a squash-merge case it would recognize as landed but this assessor reports as unlanded or blocked.
+Its default mode is a dry run that writes nothing; `--clean <id> --yes` re-verifies the endpoint is dead, the work is landed, and the fleet is not frozen, then removes only that one id's volatile state files and `tasktmp`, never worktrees, homes, clones, branches, or backend endpoints.
+
 ## Two task shapes
 
 Ship tasks change projects and ship by project mode (`no-mistakes`, `direct-PR`, or `local-only`); scout tasks investigate, plan, reproduce bugs, or audit, then leave a report at `data/<id>/report.md` and never push.

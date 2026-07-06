@@ -26,7 +26,8 @@ Usage:
   fm-freeze.sh off
   fm-freeze.sh status
 
-Freeze is local operational state. It blocks fm-spawn.sh and fm-send.sh unless
+Freeze is local operational state. It blocks fm-spawn.sh, fm-send.sh,
+fm-watch.sh, fm-watch-arm.sh, and away-mode daemon injection unless
 FM_FLEET_FREEZE_BYPASS=1 is set for that specific command.
 EOF
 }

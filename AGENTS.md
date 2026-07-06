@@ -101,6 +101,7 @@ state/               volatile runtime signals; gitignored
   x-poll.error       generated X-mode relay diagnostic dedupe marker
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
   .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
+  .fleet-freeze      durable local park flag; present = fm-spawn.sh, fm-send.sh, fm-watch.sh, fm-watch-arm.sh, and daemon injection refuse (set/cleared by bin/fm-freeze.sh, section 8)
   .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
   .hash-* .count-* .stale-* .stale-since-* .wedge-escalations-* .seen-* .hb-surfaced-* .last-* .heartbeat-streak   watcher internals; never touch
   .watch-triage.log  watcher's absorbed-wake debug log (size-capped); never relied on, safe to delete
@@ -128,9 +129,9 @@ It composes today's `fm-lock.sh`, `fm-bootstrap.sh`, and `fm-wake-drain.sh` - ca
    When the lock could not be acquired, the queue is left untouched because another session owns it, and the guard's tangle/watcher-liveness alarms still print in read-only advisory mode without drain, re-arm, or checkout repair commands.
 4. **Context digest** - the full contents of `data/projects.md`, `data/secondmates.md`, `data/captain.md`, and `data/learnings.md`, each clearly delimited.
    A file that does not exist prints an explicit `ABSENT` marker, never confused with an empty-but-present file: absence is meaningful (`captain.md` absent means use this template's defaults, `projects.md` absent means rebuild it from the clones under `projects/`, etc.).
-5. **Fleet-state digest** - the full `data/backlog.md`; every `state/<id>.meta`; a bounded tail of each task's `state/<id>.status` (labeled as wake-EVENT history, not current state, with the full log path printed for a deeper read); the `state/.afk` flag; and one cheap alive/dead read of each task's recorded backend endpoint.
+5. **Fleet-state digest** - the full `data/backlog.md`; every `state/<id>.meta`; a bounded tail of each task's `state/<id>.status` (labeled as wake-EVENT history, not current state, with the full log path printed for a deeper read); the `state/.afk` flag; the `state/.fleet-freeze` flag; and one cheap alive/dead read of each task's recorded backend endpoint.
    That liveness line is a fast presence check only, not a full state read - when you need a crew's actual current state (a run-step, not just "is the pane there"), read it with `bin/fm-crew-state.sh <id>` as before; the digest deliberately skips that deeper, slower read for every task so it stays fast and bounded.
-6. **Next step** - a conditional closing reminder for the actual watcher owner: stay read-only when the lock was refused, use `/afk` when away mode is active, source `config/x-mode.env` before arming when X mode is active, or arm normally otherwise.
+6. **Next step** - a conditional closing reminder for the actual watcher owner: stay read-only when the lock was refused, use `/afk` when away mode is active, stay in orchestration/diagnosis mode when fleet freeze is active, source `config/x-mode.env` before arming when X mode is active, or arm normally otherwise.
    The script itself never arms the watcher, because a fire-and-forget arm from inside a script that then exits would be reaped immediately, silently dropping supervision.
 
 **Everything in this digest is read exactly once, at session start.**
@@ -177,7 +178,7 @@ Otherwise it prints one line per problem or capability fact; handle each:
   It prints only when `config/backlog-backend` is absent or set to `tasks-axi` and the compatibility probe accepts `tasks-axi --version` as 0.1.1 or newer.
   If the backend is not opted out and `tasks-axi` is missing or incompatible, bootstrap reports `MISSING: tasks-axi (install: npm install -g tasks-axi)` but still falls back to hand-editing and never blocks work.
   If `config/backlog-backend=manual`, bootstrap hand-edits and does not suggest installing `tasks-axi`.
-- `NUDGE_SECONDMATES: <window-targets...>` - the secondmate sweep fast-forwarded one or more *running* secondmate homes to firstmate's current version and their instruction surface (`AGENTS.md`, `bin/`, or `.agents/skills/`) actually changed; for each listed window, send a one-line re-read nudge with `bin/fm-send.sh <window-target> 'firstmate was updated to the latest - please re-read your AGENTS.md to pick up the new instructions.'` so that secondmate picks up its new instructions.
+- `NUDGE_SECONDMATES: <window-targets...>` - the secondmate sweep fast-forwarded one or more _running_ secondmate homes to firstmate's current version and their instruction surface (`AGENTS.md`, `bin/`, or `.agents/skills/`) actually changed; for each listed window, send a one-line re-read nudge with `bin/fm-send.sh <window-target> 'firstmate was updated to the latest - please re-read your AGENTS.md to pick up the new instructions.'` so that secondmate picks up its new instructions.
   This mirrors `/updatefirstmate`'s `nudge-secondmates:` report: it is a gentle steer, never an interruption, and the fast-forward already landed safely.
   A secondmate that was skipped, already current, or whose advance changed no instructions is not listed and must not be disturbed.
 - `FMX: X mode on ...` / `FMX: X mode off ...` - bootstrap confirmed or removed the local X-mode poll artifacts; follow section 14 for watcher cadence restart only when a running watcher needs the transition applied immediately.
@@ -218,11 +219,19 @@ Schema:
   "rules": [
     {
       "when": "<natural-language condition describing a kind of task>",
-      "use": { "harness": "<adapter>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max, optional>" },
+      "use": {
+        "harness": "<adapter>",
+        "model": "<optional model>",
+        "effort": "<low|medium|high|xhigh|max, optional>"
+      },
       "why": "<optional rationale that helps firstmate choose>"
     }
   ],
-  "default": { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>" }
+  "default": {
+    "harness": "<adapter>",
+    "model": "<optional model>",
+    "effort": "<optional effort>"
+  }
 }
 ```
 
@@ -374,14 +383,14 @@ Do not eagerly backfill every project.
 
 Route each piece of durable knowledge to its most specific home:
 
-| Kind of knowledge | Home |
-| --- | --- |
-| Captain preferences and working style | `data/captain.md` |
-| Project-intrinsic knowledge | that project's own `AGENTS.md`, via normal crewmate delivery, never hand-written by firstmate |
-| Fleet-local operational facts and gotchas | `data/learnings.md` |
-| Knowledge generalizable to every firstmate user | the shared `AGENTS.md`, shipped via PR through the pipeline |
-| Task-scoped notes | backlog item notes (`tasks-axi update <id> --append "<note>"`, or hand-edit per the active backend) |
-| Investigation findings | scout reports at `data/<id>/report.md` |
+| Kind of knowledge                               | Home                                                                                                |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Captain preferences and working style           | `data/captain.md`                                                                                   |
+| Project-intrinsic knowledge                     | that project's own `AGENTS.md`, via normal crewmate delivery, never hand-written by firstmate       |
+| Fleet-local operational facts and gotchas       | `data/learnings.md`                                                                                 |
+| Knowledge generalizable to every firstmate user | the shared `AGENTS.md`, shipped via PR through the pipeline                                         |
+| Task-scoped notes                               | backlog item notes (`tasks-axi update <id> --append "<note>"`, or hand-edit per the active backend) |
+| Investigation findings                          | scout reports at `data/<id>/report.md`                                                              |
 
 When the captain invokes `/stow`, load the `stow` skill.
 It sweeps the current session for uncaptured durable knowledge, routes findings with this table, files undone next steps to the backlog, and reports whether the session is safe to reset.
@@ -554,7 +563,7 @@ Use chat for yes/no decisions; use lavish-axi when there are multiple findings o
 Judge a validating crewmate by the run's step status, never by whether its shell is still running.
 Read its current state with `bin/fm-crew-state.sh <id>`: a deterministic, token-tight one-line read that takes the matching no-mistakes run-step as the source of truth and reconciles it against the crewmate's `state/<id>.status` log.
 Because the run-step is authoritative before pane liveness, a crewmate whose window closed after or during validation can still report `done` or `working` from its run; a missing pane becomes `unknown` only when no matching run exists.
-That log is an append-only wake-*event* log, not a current-state field, and it goes stale the moment a resolved gate lets the run resume: after you answer a `needs-decision`/`blocked` and the crewmate silently resumes (responds to the gate, the pipeline fixes, it re-validates), the log's last line still reads `needs-decision`/`blocked` while the run-step has moved on.
+That log is an append-only wake-_event_ log, not a current-state field, and it goes stale the moment a resolved gate lets the run resume: after you answer a `needs-decision`/`blocked` and the crewmate silently resumes (responds to the gate, the pipeline fixes, it re-validates), the log's last line still reads `needs-decision`/`blocked` while the run-step has moved on.
 So never infer current state from a `tail` of that log; `bin/fm-crew-state.sh` reports the live run-step state and explicitly flags the stale log line superseded, where a raw `tail` would mislead you into re-escalating settled work.
 The fields below name the run-step states and outcomes it reads from `no-mistakes axi status`; run that command directly when you want the full gate findings.
 During the `ci` monitor phase, `bin/fm-crew-state.sh` also reads the ci step log tail because `axi status` reports both "still waiting on checks" and "checks green, waiting on merge" as `ci,running`.
@@ -631,7 +640,7 @@ For a fresh `stale` pane, the watcher checks the same positive evidence before t
 The watcher reads that evidence with `bin/fm-crew-state.sh` (run-step first, then pane), so a finish that wrote no `done:` status - for example one reported only through interactive pane menus - is no longer swallowed.
 A `heartbeat` with no captain-relevant change is likewise absorbed.
 Absorbed wakes are advanced past their suppression marker and logged to `state/.watch-triage.log` while the watcher keeps blocking - no queue entry, no exit, no LLM turn.
-It exits with one reason line on an *actionable* wake: a `signal` carrying a captain-relevant verb (`needs-decision:`/`blocked:`/`failed:`/`done:`/`PR ready`/`checks green`/`ready in branch`/`merged`); a no-verb `signal` whose crewmate is NOT provably working (it stopped its turn with no running pipeline and no busy pane, so it may be done, waiting on a decision, or wedged); any `check`; a `stale` whose crewmate is not provably working, whether or not its status log's last line is captain-relevant (surfaced at once, never left to wait out the timer); a provably-working `stale` that stays idle past the wedge threshold (`FM_STALE_ESCALATE_SECS`, default 240s); or the heartbeat fleet-scan's fail-safe backstop catching a captain-relevant status the per-wake path missed.
+It exits with one reason line on an _actionable_ wake: a `signal` carrying a captain-relevant verb (`needs-decision:`/`blocked:`/`failed:`/`done:`/`PR ready`/`checks green`/`ready in branch`/`merged`); a no-verb `signal` whose crewmate is NOT provably working (it stopped its turn with no running pipeline and no busy pane, so it may be done, waiting on a decision, or wedged); any `check`; a `stale` whose crewmate is not provably working, whether or not its status log's last line is captain-relevant (surfaced at once, never left to wait out the timer); a provably-working `stale` that stays idle past the wedge threshold (`FM_STALE_ESCALATE_SECS`, default 240s); or the heartbeat fleet-scan's fail-safe backstop catching a captain-relevant status the per-wake path missed.
 Repeated provably-working stale escalations on the same unchanged pane are counted in `state/.wedge-escalations-*`; at `FM_WEDGE_DEMAND_INSPECT_COUNT` (default 3), the stale reason includes `demand-deep-inspection` so the wake is not mistaken for another routine validation wait.
 A captain-relevant status-log line does not by itself make a stale pane terminal: a crewmate gets no new status entry once firstmate hands it to a no-mistakes validation, so its last line can still read `done:` from BEFORE that validation started for the run's entire duration; a provably-working crew therefore always wins over that stale line and is absorbed (with the same wedge-escalation safety net), and only a crewmate that is NOT provably working has its status log trusted to decide terminal-vs-non-terminal.
 Only an actionable wake is written to the durable queue at `state/.wake-queue` - before advancing suppression markers such as `.seen-*`, `.stale-*`, `.last-check`, or `.last-heartbeat` - and only an actionable wake ends the background task, so you re-arm exactly once per actionable event instead of once per wake.
@@ -676,7 +685,7 @@ On wake, in order of cheapness:
 
 1. Read the reason line and drain queued wake records with `bin/fm-wake-drain.sh`.
 2. `signal:` read the listed status files first; a wake lists every signal that landed within the coalescing grace window (e.g. a status write plus the same turn's turn-end marker), and each is ~30 tokens and usually sufficient.
-   A status line is the wake *event*, not the crewmate's current state; when you need the live state - especially to confirm a `needs-decision`/`blocked` is still real and not already resolved-and-resumed - read it with `bin/fm-crew-state.sh <id>`, which reconciles the authoritative run-step over the possibly-stale log line, and never `tail` the status log as the current-state source.
+   A status line is the wake _event_, not the crewmate's current state; when you need the live state - especially to confirm a `needs-decision`/`blocked` is still real and not already resolved-and-resumed - read it with `bin/fm-crew-state.sh <id>`, which reconciles the authoritative run-step over the possibly-stale log line, and never `tail` the status log as the current-state source.
 3. `stale:` the crewmate stopped without reporting; peek the pane (`bin/fm-peek.sh <window>`) to diagnose.
    If the stale reason includes `demand-deep-inspection`, inspect the pane, `bin/fm-crew-state.sh <id>`, and the validation logs before re-arming.
    If the pane is waiting, looping, confused, or unresponsive, load `stuck-crewmate-recovery`.
@@ -714,6 +723,18 @@ If a crewmate sent to work firstmate-on-itself branches or commits in the primar
 The check is scoped precisely to the primary: detached HEAD (the legitimate resting state of crewmate worktrees and secondmate homes on the default branch) and the default branch itself never alarm; only a named non-default branch checked out in the primary does.
 The same assertion runs at session start as the bootstrap `TANGLE:` line inside the `bin/fm-session-start.sh` digest (section 3), with read-only wording when this session does not hold the fleet lock.
 Two further guards prevent the tangle upstream: `fm-spawn` refuses to launch unless treehouse or Orca yields a genuine isolated worktree distinct from the primary checkout, and every ship brief's first instruction has the crewmate verify it is in its own worktree before branching (section 11).
+
+**Fleet freeze is a manual park switch, not an automated guard.**
+Run `bin/fm-freeze.sh on [reason...]` to park the fleet locally: while `state/.fleet-freeze` exists, `fm-spawn.sh`, `fm-send.sh`, `fm-watch.sh`, `fm-watch-arm.sh`, and the away-mode daemon's injection path all refuse with the recorded reason, so nothing spawns, gets steered, or wakes anything until the freeze is lifted.
+Unfreeze with `bin/fm-freeze.sh off`, or set `FM_FLEET_FREEZE_BYPASS=1` for one deliberate command when a single action genuinely needs to bypass the park.
+`bin/fm-freeze.sh status` reports the current state and reason; the session-start digest surfaces an active freeze as its own `FLEET FREEZE` subsection (section 3) and its closing reminder tells you to stay in orchestration/diagnosis mode instead of arming the watcher normally.
+Use it for incident response or any other time fleet activity should pause without tearing anything down.
+
+**Stale tracked-state cleanup is diagnose-first, never a substitute for normal teardown.**
+`bin/fm-fleet-map.sh` is a read-only diagnostic that prints every tracked `state/*.meta` record next to visible Herdr agents (or other backends' endpoint liveness), matching by exact target then by cwd, and warns on `stale-tracked` records (tracked but no live endpoint found) and `operator-untracked-herdr` agents (a live agent no tracked record claims); it never spawns, steers, tears down, or mutates anything.
+`bin/fm-reconcile-stale.sh` reuses that same matching to reconcile it: its default mode is a dry run that reports every stale-tracked record together with a landed-work assessment (its carve-outs mirror `fm-teardown.sh` - secondmate-always-blocked and scout-report-gates-clean - but the assessor is deliberately more conservative than `fm-teardown.sh` and omits its PR-head patch-id containment fallback, so use `bin/fm-teardown.sh` directly for a squash-merge case it would recognize as landed but this reports as unlanded or blocked) and any operator-untracked agents, and it writes nothing.
+`--clean <id> --yes` re-verifies the endpoint is still dead, the recorded work path holds no unlanded work, and the fleet is not frozen, then removes only that id's volatile state files (`*.status`, `*.meta`, `*.turn-ended`, `*.check.sh`, `*.pi-ext.ts`, `*.grok-turnend-token`) and its `tasktmp`; it never removes worktrees, secondmate homes, project clones, branches, or backend endpoints.
+Prefer `bin/fm-teardown.sh` for anything still reachable through its normal lifecycle; reach for `fm-reconcile-stale.sh` only once a record is provably dead and orphaned.
 
 On the `claude` harness, "no turn ends blind" has a structural backstop beyond the pull-based `fm-guard.sh` banner: `bin/fm-turnend-guard.sh`, a Claude Code Stop hook registered in the tracked `.claude/settings.json`, fires on every primary turn end and, when tasks are in flight without a live identity-matched watcher lock and fresh beacon, blocks the stop (exit 2 with a reason) so the turn cannot end without acting on it first.
 It shares status fields with `fm-guard.sh` via `bin/fm-supervision-lib.sh`, uses `bin/fm-wake-lib.sh` for live watcher lock health, and never blocks more than once per turn (Claude Code's own `stop_hook_active` loop-guard field lets it always allow the retry).
@@ -778,12 +799,15 @@ Update it on every dispatch, completion, and decision.
 
 ```markdown
 ## In flight
+
 - [ ] <id> - <one line> (repo: <name>, since <date>)
 
 ## Queued
+
 - [ ] <id> - <one line> (repo: <name>) blocked-by: <id> - <reason>
 
 ## Done
+
 - [x] <id> - <one line> - <https://github.com/owner/repo/pull/number> (merged <date>)
 - [x] <id> - <one line> - local main (merged <date>)
 - [x] <id> - <one line> - data/<id>/report.md (reported <date>)
