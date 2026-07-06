@@ -300,6 +300,7 @@ Reconcile reality with your records before doing anything else, working from the
    If older wake-event history matters, read the individual full status log named in the digest instead of bulk-reading every status file.
 4. Use the `window=` values from the digest's `state/*.meta` entries as the live direct-report set, and read the digest's per-task `endpoint: alive|dead` line for each - that cheap check is already done; do not re-probe it yourself.
    Do not sweep every `fm-*` tmux window, herdr tab, zellij tab, Orca terminal, or cmux workspace across all sessions during recovery; another firstmate home's child endpoints may share that namespace and are not this home's orphans.
+   When tracked state and the live Herdr surface disagree, `bin/fm-fleet-map.sh` prints a read-only inventory of both to diagnose the drift.
 5. If the digest reports a recorded direct-report's endpoint as `dead` (or a meta has no `window=`), reconcile it through its meta as described below.
 6. For meta with no window, or an endpoint the digest reported dead, reconcile by kind.
    For ordinary crewmates, check the recorded backend metadata first; use `treehouse status` for treehouse-backed tasks, and the recorded `orca_worktree_id=`/`terminal=` for Orca tasks.
@@ -679,6 +680,8 @@ bin/fm-watch-arm.sh --restart  # home-scoped forced restart; never a broad pkill
 bin/fm-watch.sh            # the watcher itself; exits with: signal|stale|check|heartbeat
 bin/fm-wake-drain.sh       # drain queued wake records at turn start; asserts guard after draining
 bin/fm-crew-state.sh <id>  # one-line current-state read; reconciles matching run-step, pane, and status log
+bin/fm-freeze.sh on|off|status  # park/unpark the fleet during an incident; spawn, steer, and the watcher refuse while frozen
+bin/fm-usage-tripwire.sh   # read-only check for a token/session usage burst; arm as a per-task state/<id>.check.sh
 ```
 
 On wake, in order of cheapness:
