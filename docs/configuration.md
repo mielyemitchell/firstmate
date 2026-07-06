@@ -60,6 +60,25 @@ That keeps a tmux pane nested inside herdr on the tmux transport, matching the r
 Target detection uses `FM_SUPERVISOR_TARGET`, then `$TMUX_PANE`, then `"${HERDR_SESSION:-default}:${HERDR_PANE_ID}"` under herdr, then the legacy `firstmate:0` tmux fallback with a warning.
 Selecting any other supervisor backend, including `zellij`, `orca`, or `cmux`, refuses at daemon startup instead of trying tmux injection primitives against a non-tmux pane.
 
+## Fleet freeze (bin/fm-freeze.sh)
+
+`bin/fm-freeze.sh on [reason...]` writes local, gitignored `state/.fleet-freeze`; `off` removes it; `status` prints the current state and reason.
+While the file is present, `fm-spawn.sh`, `fm-send.sh`, `fm-watch.sh`, `fm-watch-arm.sh`, and the away-mode daemon's injection path all refuse before doing anything else, via the shared `fm_fleet_freeze_refuse` guard in `fm-freeze-lib.sh`.
+Set `FM_FLEET_FREEZE_BYPASS=1` for one specific command to bypass the freeze deliberately; there is no way to disable the guard fleet-wide except removing the freeze file itself.
+The session-start digest prints a `FLEET FREEZE` subsection when the file is present and its closing next-step reminder says to stay in orchestration/diagnosis mode instead of arming the watcher normally.
+Freeze is local operational state, not tracked config, and is not inherited into secondmate homes.
+
+## Stale tracked-state tools (bin/fm-fleet-map.sh, bin/fm-reconcile-stale.sh)
+
+`bin/fm-fleet-map.sh` is a read-only diagnostic: it prints every tracked `state/*.meta` record next to visible Herdr agents (or other backends' endpoint liveness), matched by exact target then by cwd, and warns on `stale-tracked` records (tracked but no live endpoint) and `operator-untracked-herdr` agents (live but untracked).
+It never spawns, steers, tears down, or mutates state, and never starts a Herdr server.
+`FM_FLEET_MAP_HERDR_JSON` points it (and `fm-reconcile-stale.sh`) at a saved `herdr agent list` JSON fixture instead of calling `herdr`; when Herdr is unavailable, tracked state still prints and non-Herdr endpoints are still checked through the normal backend liveness probe.
+
+`bin/fm-reconcile-stale.sh` reuses that same tracked/live matching (`fm-fleet-map-lib.sh`) plus a conservative landed-work assessor (`fm-landed-work-lib.sh`) that mirrors `fm-teardown.sh`'s own safety contract, including its `kind=secondmate` (always blocked, points at `fm-teardown.sh`) and `kind=scout` (gated on the report's existence alone) carve-outs.
+Its default mode is a dry run: it reports every stale-tracked record's recorded backend target, worktree/home path, and landed-work assessment, plus any operator-untracked Herdr agents, and writes nothing.
+`--clean <id> --yes` re-verifies the endpoint is still dead, the id is still classified stale-tracked, the recorded work path holds no unlanded work, and the fleet is not frozen (`FM_FLEET_FREEZE_BYPASS=1` overrides the freeze refusal for that one cleanup), then removes only that id's volatile state (`*.status`, `*.meta`, `*.turn-ended`, `*.check.sh`, `*.pi-ext.ts`, `*.grok-turnend-token`), its `tasktmp`, and its grok turn-end hook registration.
+It never removes worktrees, secondmate homes, project clones, branches, or backend endpoints; `--clean` without `--yes` prints the removal plan and refuses.
+
 ## Gate defaults (.no-mistakes.yaml)
 
 The tracked `.no-mistakes.yaml` keeps test evidence outside the repo and defines `commands.test` so no-mistakes runs firstmate's bash behavior suite directly.
@@ -260,6 +279,8 @@ FM_WEDGE_DEMAND_INSPECT_COUNT=3    # consecutive provably-working stale escalati
 FM_WATCH_TRIAGE_LOG_MAX_BYTES=262144   # size cap for the watcher's absorbed-wake debug log
 FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT=20   # seconds allowed for bootstrap's best-effort clone refresh
 FM_FLEET_PRUNE=1        # set to 0 to skip pruning local branches whose upstream is gone
+FM_FLEET_FREEZE_BYPASS=  # set to 1 to bypass an active fleet freeze for one deliberate command (spawn, send, watch, watch-arm, daemon inject, or reconcile-stale --clean)
+FM_FLEET_MAP_HERDR_JSON= # test/diagnostic override: parse this saved `herdr agent list` JSON fixture instead of calling herdr, for fm-fleet-map.sh and fm-reconcile-stale.sh
 FM_STALE_WORKTREE_LOCK_AGE_SECS=30       # min mtime age before fm-teardown.sh treats a leftover worktree git index.lock as provably stale
 FM_STALE_WORKTREE_LOCK_RETRY_WAIT_SECS=2 # seconds fm-teardown.sh waits before retrying a worktree return that failed on a git lock
 FM_BUSY_REGEX='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'   # busy-pane signatures, shared by watcher, fm-crew-state pane fallback, and tmux helper
