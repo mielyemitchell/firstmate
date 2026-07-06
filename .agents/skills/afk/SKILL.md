@@ -17,14 +17,17 @@ batched digest rather than per-wake injections.
 ## What it does
 
 1. **Set the durable away-mode flag:**
+
    ```sh
    date '+%s' > state/.afk
    ```
+
    This file survives a firstmate restart: recovery re-enters afk if the
    flag is present.
 
 2. **Ensure the sub-supervisor daemon is running.** Check the pid file; start
    the daemon only if it is dead or absent:
+
    ```sh
    if [ -f state/.supervise-daemon.pid ] && kill -0 "$(cat state/.supervise-daemon.pid)" 2>/dev/null; then
      : # daemon already alive - it picks up the flag on its next cycle
@@ -32,6 +35,7 @@ batched digest rather than per-wake injections.
      nohup bin/fm-supervise-daemon.sh >/dev/null 2>&1 &
    fi
    ```
+
    The daemon is **presence-gated**: it injects escalations only while
    `state/.afk` exists, and stays quiet otherwise.
 
@@ -76,6 +80,16 @@ travels with the message text; it does not rely on harness-level
 typed-vs-injected detection (which is not portable across claude, codex,
 opencode, pi, and grok).
 
+## Fleet-freeze guard
+
+Before either guard below, `inject_msg` calls the shared `fm_fleet_freeze_refuse`
+(`bin/fm-freeze-lib.sh`) and returns without injecting while local
+`state/.fleet-freeze` exists (set by `bin/fm-freeze.sh on`). The daemon's main
+loop refuses to start at all under an active freeze. This is a manual park
+switch, not a routine gate: a frozen fleet means the captain or firstmate
+deliberately paused everything, so the daemon must not inject escalations (or
+start injecting) until `bin/fm-freeze.sh off` lifts it.
+
 ## Busy-guard and composer guard
 
 The daemon never injects into an in-use pane. Two checks run before every
@@ -86,7 +100,7 @@ backend (tmux or herdr; see "Auto-discovered supervisor pane" below):
 - **`pane_input_pending`** - the composer holds real unsubmitted text (a
   human's half-typed line, or a previous injection whose Enter was swallowed).
   On tmux, the cursor-line detector **strips the harness's composer box
-  borders first**, so an idle *bordered* composer (claude draws `│ > … │`) is
+  borders first**, so an idle _bordered_ composer (claude draws `│ > … │`) is
   correctly read as empty, not pending. Without this, every idle claude pane
   looked like pending input and the daemon deferred 100% of escalations
   (incident afk-invx-i5). `FM_COMPOSER_IDLE_RE` still overrides empty-composer
