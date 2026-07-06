@@ -253,6 +253,27 @@ EOF
   pass "fm-reconcile-stale.sh refuses cleanup for a scout task with no report yet"
 }
 
+test_clean_refuses_unlanded_work_reported_as_blocked_on_fetch_failure() {
+  local rec case_dir fakebin live out rc=0
+  rec=$(make_case fetch-failure dead)
+  IFS='|' read -r case_dir fakebin live <<EOF
+$rec
+EOF
+  printf 'maybe-landed\n' > "$case_dir/wt/maybe-landed.txt"
+  git -C "$case_dir/wt" add maybe-landed.txt
+  git -C "$case_dir/wt" -c user.email=t@t -c user.name=t commit -q -m "maybe landed"
+  git -C "$case_dir/wt" remote set-url origin "$case_dir/no-such-origin.git"
+
+  out=$(run_reconcile "$case_dir" "$fakebin" "$live" --clean task-a --yes 2>&1) || rc=$?
+
+  expect_code 1 "$rc" "fetch-failure cleanup"
+  assert_contains "$out" "landed=blocked" "fetch-failure should report blocked, not a confirmed unlanded verdict"
+  assert_contains "$out" "could not resolve or fetch default branch" "fetch-failure detail missing"
+  assert_present "$case_dir/home/state/task-a.meta" "fetch-failure cleanup removed meta"
+
+  pass "fm-reconcile-stale.sh reports a fetch failure as inconclusive/blocked, not confirmed unlanded"
+}
+
 test_dry_run_reports_stale_and_writes_nothing
 test_clean_without_yes_refuses_and_writes_nothing
 test_clean_refuses_unlanded_work
@@ -261,4 +282,5 @@ test_clean_respects_fleet_freeze
 test_clean_yes_removes_only_state_and_tasktmp
 test_clean_refuses_secondmate_kind
 test_clean_allows_dirty_scout_with_report
+test_clean_refuses_unlanded_work_reported_as_blocked_on_fetch_failure
 test_clean_refuses_scout_without_report

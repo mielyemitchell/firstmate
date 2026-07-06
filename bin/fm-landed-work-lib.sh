@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # fm-landed-work-lib.sh - conservative landed-work assessment shared by cleanup tools.
 #
-# The safety contract mirrors fm-teardown.sh: uncommitted changes are never
-# landed, commits reachable from any remote-tracking branch are landed, and
-# local-only work may also be landed on the local default branch.
+# This is deliberately more conservative than fm-teardown.sh, not a mirror of
+# it: uncommitted changes are never landed, commits reachable from any
+# remote-tracking branch are landed, and local-only work may also be landed on
+# the local default branch, but this assessor omits fm-teardown.sh's PR-head
+# patch-id containment fallback entirely. A branch that a squash merge landed
+# only via that fallback (e.g. the PR head's patch ids match but the local
+# tree differs, or the local default hasn't fast-forwarded yet) reports
+# unlanded here even though fm-teardown.sh would recognize it as landed. That
+# failure mode is fail-safe (fm-reconcile-stale.sh --clean will refuse and
+# point at fm-teardown.sh) rather than unsafe. Use bin/fm-teardown.sh directly
+# for those squash-merge cases instead of waiting on this assessor.
 #
 # Task kind carve-outs also mirror fm-teardown.sh. A kind=secondmate record is
 # never assessed as cleanable here: secondmate retirement is an explicit,
@@ -31,21 +39,25 @@ fm_landed_default_branch() {  # <repo>
 }
 
 fm_landed_content_in_default() {  # <worktree> <project>
+  # Return codes: 0 landed, 1 confirmed content mismatch, 2 inconclusive
+  # (default branch/fetch/lookup could not be resolved, e.g. network/auth
+  # failure) - callers must not treat 2 the same as a confirmed 1.
   local wt=$1 project=$2 name ref default_tree merged_tree
-  name=$(fm_landed_default_branch "$project") || return 1
+  name=$(fm_landed_default_branch "$project") || return 2
   if git -C "$wt" remote get-url origin >/dev/null 2>&1; then
-    git -C "$wt" fetch --quiet origin "+refs/heads/$name:refs/remotes/origin/$name" >/dev/null 2>&1 || return 1
+    git -C "$wt" fetch --quiet origin "+refs/heads/$name:refs/remotes/origin/$name" >/dev/null 2>&1 || return 2
     ref="refs/remotes/origin/$name"
   elif git -C "$wt" rev-parse --quiet --verify "refs/heads/$name" >/dev/null 2>&1; then
     ref="refs/heads/$name"
   else
-    return 1
+    return 2
   fi
-  default_tree=$(git -C "$wt" rev-parse --quiet --verify "$ref^{tree}" 2>/dev/null) || return 1
-  [ -n "$default_tree" ] || return 1
-  merged_tree=$(git -C "$wt" merge-tree --write-tree "$ref" HEAD 2>/dev/null) || return 1
+  default_tree=$(git -C "$wt" rev-parse --quiet --verify "$ref^{tree}" 2>/dev/null) || return 2
+  [ -n "$default_tree" ] || return 2
+  merged_tree=$(git -C "$wt" merge-tree --write-tree "$ref" HEAD 2>/dev/null) || return 2
   merged_tree=$(printf '%s\n' "$merged_tree" | head -1)
-  [ "$merged_tree" = "$default_tree" ]
+  [ "$merged_tree" = "$default_tree" ] && return 0
+  return 1
 }
 
 fm_landed_assess_worktree() {  # <worktree> <project> <mode> [<kind>] [<report>]
@@ -114,10 +126,17 @@ fm_landed_assess_worktree() {  # <worktree> <project> <mode> [<kind>] [<report>]
     return 1
   fi
 
-  if fm_landed_content_in_default "$wt" "$project"; then
-    printf 'landed\tbranch content already present in default branch\n'
-    return 0
-  fi
+  fm_landed_content_in_default "$wt" "$project"
+  case $? in
+    0)
+      printf 'landed\tbranch content already present in default branch\n'
+      return 0
+      ;;
+    2)
+      printf 'blocked\tcould not resolve or fetch default branch to check content (network/auth issue?)\n'
+      return 1
+      ;;
+  esac
   printf 'unlanded\tcommits not reachable from any remote and not present in default branch: %s\n' "$(printf '%s' "$unpushed" | tr '\n' ';')"
   return 1
 }
