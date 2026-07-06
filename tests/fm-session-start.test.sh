@@ -475,6 +475,31 @@ EOF
   pass "next step delegates watcher ownership to the AFK daemon"
 }
 
+test_fleet_freeze_surfaces_in_digest_and_next_step() {
+  local rec root home fakebin out
+  rec=$(new_world fleet-freeze)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  {
+    printf 'created_at=2026-07-06T19:13:38Z\n'
+    printf 'home=%s\n' "$home"
+    printf 'reason=incident review\n'
+  } > "$home/state/.fleet-freeze"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "FLEET FREEZE" "fleet freeze subsection missing"
+  assert_contains "$out" "present - spawn, send, watcher, and daemon paths refuse fleet movement." "fleet freeze status did not explain enforcement"
+  assert_contains "$out" "reason=incident review" "fleet freeze reason missing from digest"
+  assert_contains "$out" "Fleet freeze is active. Stay in orchestration/diagnosis mode" "next-step did not surface freeze mode"
+
+  pass "session-start digest surfaces fleet freeze state and guidance"
+}
+
 test_context_digest_absent_empty_present
 test_lock_refusal_read_only_path
 test_output_ordering_diagnostics_lead
@@ -486,3 +511,4 @@ test_composition_invokes_real_scripts
 test_fleet_digest_empty_fleet
 test_next_step_sources_x_mode_cadence
 test_next_step_afk_delegates_to_daemon
+test_fleet_freeze_surfaces_in_digest_and_next_step

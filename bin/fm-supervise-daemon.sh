@@ -127,6 +127,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 
 # shellcheck source=bin/fm-backend.sh
 . "$FM_DAEMON_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-freeze-lib.sh
+. "$FM_DAEMON_DIR/fm-freeze-lib.sh"
 
 # Shared wake classifier (last_status_line, status_is_captain_relevant,
 # window_to_task, scan_captain_relevant_statuses). The SAME library backs the
@@ -715,6 +717,7 @@ window_for_task() {  # <task-key> [state]
 inject_msg() {  # <message> [state]
   local msg=$1 state target backend retries sleep_s verdict
   state="${2:-$(_state_root)}"
+  fm_fleet_freeze_refuse "inject" "$state" || return 1
   # (1) Presence-gate: inject ONLY when afk is active. When afk is off, the
   # daemon self-handles and stays quiet; firstmate drives the normal always-on
   # watcher triage. Escalations buffer and survive for the next catch-up flush.
@@ -850,6 +853,7 @@ fm_super_main() {
   local STATE
   STATE="$(_state_root)"
   mkdir -p "$STATE"
+  fm_fleet_freeze_refuse "supervise-daemon" "$STATE" || exit 1
 
   # Source the portable lock helpers (works on macOS where flock is absent).
   # Export FM_STATE_OVERRIDE so the lib resolves the same state dir.

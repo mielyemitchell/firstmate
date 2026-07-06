@@ -968,6 +968,22 @@ test_inject_msg_herdr_submits_through_backend_dispatch() {
   pass "inject_msg: dispatches busy-guard/composer-guard/submit through the herdr backend and succeeds on a confirmed empty composer"
 }
 
+test_inject_msg_refuses_while_frozen() {
+  local dir state
+  dir=$(make_supercase inject-frozen)
+  state="$dir/state"
+  afk_enter "$state"
+  printf 'reason=parked\n' > "$state/.fleet-freeze"
+  (
+    fm_backend_target_exists() { fail "target_exists should not run when fleet is frozen"; }
+    fm_backend_send_text_submit() { fail "send_text_submit should not run when fleet is frozen"; }
+    if inject_msg "hello" "$state"; then
+      fail "inject_msg should refuse while fleet freeze is active"
+    fi
+  ) || fail "frozen inject_msg subshell failed"
+  pass "inject_msg refuses before backend injection while fleet freeze is active"
+}
+
 test_daemon_state_root_uses_fm_home
 test_classify_routine_signal_self
 test_classify_terminal_signal_escalates
@@ -1024,3 +1040,4 @@ test_inject_msg_herdr_busy_guard_defers
 test_inject_msg_herdr_composer_guard_defers
 test_inject_msg_herdr_pane_gone_defers
 test_inject_msg_herdr_submits_through_backend_dispatch
+test_inject_msg_refuses_while_frozen

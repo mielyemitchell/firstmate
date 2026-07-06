@@ -619,6 +619,27 @@ test_arm_fails_loud_when_no_fresh_watcher_confirmable() {
   pass "arm reports FAILED and exits non-zero when no fresh watcher can be confirmed"
 }
 
+test_watch_and_arm_refuse_while_frozen() {
+  local dir state fakebin out status
+  dir=$(make_case freeze-refuse)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/freeze.out"
+  printf 'reason=parked\n' > "$state/.fleet-freeze"
+
+  status=0
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" "$WATCH" > "$out" 2>&1 || status=$?
+  [ "$status" -eq 1 ] || fail "frozen direct watcher should exit 1, got $status"
+  grep -F 'fleet frozen: watch refused' "$out" >/dev/null || fail "direct watcher did not refuse because of freeze"
+
+  status=0
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" "$WATCH_ARM" > "$out" 2>&1 || status=$?
+  [ "$status" -eq 1 ] || fail "frozen watch-arm should exit 1, got $status"
+  grep -F 'fleet frozen: watch-arm refused' "$out" >/dev/null || fail "watch-arm did not refuse because of freeze"
+
+  pass "watcher and watch-arm refuse while fleet freeze is active"
+}
+
 test_singleton_start
 test_stale_watch_lock_reclaimed
 test_live_stale_watch_lock_is_actionable
@@ -639,3 +660,4 @@ test_arm_hup_cleans_child_and_temp_output
 test_arm_propagates_immediate_wake_before_confirmation
 test_arm_waits_for_peer_beacon_after_child_stands_down
 test_arm_fails_loud_when_no_fresh_watcher_confirmable
+test_watch_and_arm_refuse_while_frozen
