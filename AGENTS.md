@@ -101,9 +101,10 @@ state/               volatile runtime signals; gitignored
   x-outbox/          generated X-mode dry-run reply and dismiss previews; inspect it when FMX_DRY_RUN is set (section 14)
   x-poll.error       generated X-mode relay diagnostic dedupe marker
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
+  .pending-acks      durable fm-send --expect-ack rows: id<TAB>sent_at<TAB>deadline<TAB>pre_status_sig<TAB>pre_status_lines<TAB>escalated<TAB>summary; scanned by the watcher, pruned per-task by teardown
   .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
   .fleet-freeze      durable fleet-freeze flag; present = fm-spawn.sh, fm-send.sh, fm-watch.sh, fm-watch-arm.sh, and the supervise daemon refuse fleet movement (set by bin/fm-freeze.sh on, cleared by bin/fm-freeze.sh off; section 8)
-  .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
+  .watch.lock .wake-queue.lock .pending-acks.lock watcher singleton and queue serialization locks
   .hash-* .count-* .stale-* .stale-since-* .wedge-escalations-* .seen-* .hb-surfaced-* .last-* .heartbeat-streak   watcher internals; never touch
   .watch-triage.log  watcher's absorbed-wake debug log (size-capped); never relied on, safe to delete
   .last-watcher-beat watcher liveness beacon, touched every poll (including while absorbing benign wakes); guard scripts read it
