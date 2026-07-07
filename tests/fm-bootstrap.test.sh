@@ -170,6 +170,25 @@ SH
   chmod +x "$fakebin/no-mistakes"
 }
 
+# Unlike add_hanging_no_mistakes (a cooperative process that dies immediately on
+# the default SIGTERM), this stub ignores SIGTERM so the probe timeout's
+# TERM -> sleep 0.2 -> KILL escalation (fm-bootstrap.sh no_mistakes_bounded) has
+# to actually reach the KILL branch to bound it. `trap '' TERM` sets SIGTERM to
+# SIG_IGN, a disposition POSIX preserves across exec, so the `exec sleep`
+# replacing this script's own process image keeps ignoring TERM.
+add_stubborn_no_mistakes() {
+  local fakebin=$1 sleep_secs=$2
+  cat > "$fakebin/no-mistakes" <<SH
+#!/usr/bin/env bash
+trap '' TERM
+if [ "\${1:-}" = --version ]; then
+  exec sleep $sleep_secs
+fi
+exit 0
+SH
+  chmod +x "$fakebin/no-mistakes"
+}
+
 # A dead/unreachable no-mistakes daemon leaves `no-mistakes --version` hanging
 # forever (no built-in connect timeout: 2026-07-04 gate run
 # 01KWQPPBVS34GJ5TKC2CQTH7VW wedged 3+ hours in tests/fm-fleet-sync.test.sh this
@@ -207,6 +226,22 @@ test_no_mistakes_probe_timeout() {
   elapsed=$((SECONDS - start))
   [ "$out" = "$missing" ] || fail "hung no-mistakes probe: expected '$missing', got: $out"
   [ "$elapsed" -lt 10 ] || fail "hung no-mistakes probe: expected a bounded return, took ${elapsed}s"
+
+  # A probe that ignores SIGTERM (simulating a daemon that does not respond to
+  # the default signal) must still be bounded: the TERM -> sleep 0.2 -> KILL
+  # escalation has to fall through to SIGKILL, which cannot be ignored.
+  case_dir="$TMP_ROOT/no-mistakes-probe-stubborn"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_tasks_axi "$fakebin" "0.1.1"
+  add_stubborn_no_mistakes "$fakebin" 30
+  start=$SECONDS
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_NO_MISTAKES_PROBE_TIMEOUT=1 "$ROOT/bin/fm-bootstrap.sh")
+  elapsed=$((SECONDS - start))
+  [ "$out" = "$missing" ] || fail "SIGTERM-ignoring no-mistakes probe: expected '$missing', got: $out"
+  [ "$elapsed" -lt 10 ] || fail "SIGTERM-ignoring no-mistakes probe: expected the KILL escalation to bound it, took ${elapsed}s"
 
   pass "bootstrap bounds no-mistakes probes and degrades a hung daemon to MISSING"
 }
