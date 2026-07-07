@@ -85,7 +85,7 @@ checks_output_means_no_checks() {
   local output=$1
   [ -z "$output" ] && return 0
   case "$output" in
-    *"no checks"*|*"No checks"*|*"no check runs"*|*"No check runs"*) return 0 ;;
+    *"no checks"*|*"No checks"*|*"no check runs"*|*"No check runs"*|*"no CI checks configured"*) return 0 ;;
   esac
   return 1
 }
@@ -115,25 +115,31 @@ check_summary_from_json() {
 }
 
 check_summary_from_text() {
-  local output=$1
+  local output=$1 summary_line failed pending
   checks_output_means_no_checks "$output" && return 0
-  if printf '%s\n' "$output" | grep -Eiq '(^|[^[:alpha:]])(fail|failure|failing|error|timed_out|action_required)([^[:alpha:]]|$)'; then
+  # gh-axi's primary check output is a fixed "summary: \"X passed, Y failed,
+  # [Z skipped,] [W pending,] N total\"" line, with per-check "name,conclusion"
+  # rows in a separate section below it. Read counts only off that summary
+  # line so a check/job named e.g. "cancel-previous-runs" or "fail-fast"
+  # can never be mistaken for an actual failing/pending/cancelled state.
+  summary_line=$(printf '%s\n' "$output" | grep -m1 -E '^summary:')
+  if [ -z "$summary_line" ]; then
+    printf '%s\n' "unknown"
+    return 1
+  fi
+  failed=$(printf '%s\n' "$summary_line" | sed -n 's/.*[^0-9]\([0-9][0-9]*\) failed.*/\1/p')
+  pending=$(printf '%s\n' "$summary_line" | sed -n 's/.*[^0-9]\([0-9][0-9]*\) pending.*/\1/p')
+  failed=${failed:-0}
+  pending=${pending:-0}
+  if [ "$failed" -gt 0 ]; then
     printf '%s\n' "fail"
     return 1
   fi
-  if printf '%s\n' "$output" | grep -Eiq '(^|[^[:alpha:]])(pending|queued|waiting|in_progress|requested|expected)([^[:alpha:]]|$)'; then
+  if [ "$pending" -gt 0 ]; then
     printf '%s\n' "pending"
     return 1
   fi
-  if printf '%s\n' "$output" | grep -Eiq '(^|[^[:alpha:]])(cancel|cancelled|canceled)([^[:alpha:]]|$)'; then
-    printf '%s\n' "cancel"
-    return 1
-  fi
-  if printf '%s\n' "$output" | grep -Eiq '(^|[^[:alpha:]])(pass|success|skipping|skipped|neutral)([^[:alpha:]]|$)'; then
-    return 0
-  fi
-  printf '%s\n' "unknown"
-  return 1
+  return 0
 }
 
 gh_axi_checks_needs_fallback() {

@@ -52,7 +52,7 @@ add_gh_mocks() {
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_TEST_GH_AXI_LOG"
 case "${1:-} ${2:-}" in
-  "pr checks") printf 'build\tpass\t0\t%s\n' 'https://checks.example/build' ;;
+  "pr checks") printf 'summary: "1 passed, 0 failed, 1 total"\n' ;;
 esac
 exit 0
 SH
@@ -80,10 +80,26 @@ printf '%s\n' "$*" >> "$FM_TEST_GH_AXI_LOG"
 case "${1:-} ${2:-}" in
   "pr checks")
     case "$FM_TEST_CHECK_ROLLUP" in
-      green) printf 'build\tpass\t0\t%s\n' 'https://checks.example/build' ;;
-      failing) printf 'build\tfail\t1\t%s\n' 'https://checks.example/build' ; exit 1 ;;
-      pending) printf 'build\tpending\t0\t%s\n' 'https://checks.example/build' ; exit 8 ;;
-      none) exit 0 ;;
+      green)
+        printf 'summary: "1 passed, 0 failed, 1 total"\n'
+        printf 'checks[1]{name,conclusion}:\n'
+        printf '  cancel-previous-runs,pass\n'
+        ;;
+      failing)
+        printf 'summary: "0 passed, 1 failed, 1 total"\n'
+        printf 'checks[1]{name,conclusion}:\n'
+        printf '  fail-fast,fail\n'
+        exit 1
+        ;;
+      pending)
+        printf 'summary: "0 passed, 0 failed, 1 pending, 1 total"\n'
+        printf 'checks[1]{name,conclusion}:\n'
+        printf '  build,pending\n'
+        exit 8
+        ;;
+      none)
+        printf 'checks: "0 passed, 0 failed — this PR has no CI checks configured"\n'
+        ;;
     esac
     ;;
 esac
