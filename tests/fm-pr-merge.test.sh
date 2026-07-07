@@ -42,13 +42,18 @@ make_case() {
   printf '%s\n' "$case_dir"
 }
 
-# gh-axi mock recording every invocation to a log file, and gh mock answering
-# headRefOid for fm-pr-check.sh's pr_head lookup. Args: case_dir head_sha
+# gh-axi mock recording every invocation to a log file, answering PR checks
+# with a green rollup, and gh mock answering headRefOid for fm-pr-check.sh's
+# pr_head lookup.
+# Args: case_dir head_sha
 add_gh_mocks() {
   local case_dir=$1 head=$2
   cat > "$case_dir/fakebin/gh-axi" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_TEST_GH_AXI_LOG"
+case "${1:-} ${2:-}" in
+  "pr checks") printf 'build\tpass\t0\t%s\n' 'https://checks.example/build' ;;
+esac
 exit 0
 SH
   cat > "$case_dir/fakebin/gh" <<SH
@@ -57,6 +62,76 @@ case "\${1:-} \${2:-}" in
   "pr view")
     case " \$* " in
       *headRefOid*) printf '%s\n' '$head' ; exit 0 ;;
+    esac
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/gh-axi" "$case_dir/fakebin/gh"
+}
+
+# gh-axi/gh mocks for focused check-rollup cases.
+# Args: case_dir rollup
+add_gh_mocks_with_checks() {
+  local case_dir=$1 rollup=$2
+  cat > "$case_dir/fakebin/gh-axi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_TEST_GH_AXI_LOG"
+case "${1:-} ${2:-}" in
+  "pr checks")
+    case "$FM_TEST_CHECK_ROLLUP" in
+      green) printf 'build\tpass\t0\t%s\n' 'https://checks.example/build' ;;
+      failing) printf 'build\tfail\t1\t%s\n' 'https://checks.example/build' ; exit 1 ;;
+      pending) printf 'build\tpending\t0\t%s\n' 'https://checks.example/build' ; exit 8 ;;
+      none) exit 0 ;;
+    esac
+    ;;
+esac
+exit 0
+SH
+  cat > "$case_dir/fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "pr checks")
+    case "$FM_TEST_CHECK_ROLLUP" in
+      green) printf '[{"name":"build","bucket":"pass","state":"SUCCESS"}]\n' ;;
+      failing) printf '[{"name":"build","bucket":"fail","state":"FAILURE"}]\n' ; exit 1 ;;
+      pending) printf '[{"name":"build","bucket":"pending","state":"PENDING"}]\n' ; exit 8 ;;
+      none) printf '[]\n' ;;
+    esac
+    ;;
+  "pr view")
+    case " $* " in
+      *headRefOid*) printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ; exit 0 ;;
+    esac
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/gh-axi" "$case_dir/fakebin/gh"
+  printf '%s\n' "$rollup" > "$case_dir/check-rollup"
+}
+
+add_gh_mocks_with_gh_checks_fallback() {
+  local case_dir=$1
+  cat > "$case_dir/fakebin/gh-axi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_TEST_GH_AXI_LOG"
+case "${1:-} ${2:-}" in
+  "pr checks") echo "unknown flag: --repo" >&2 ; exit 1 ;;
+esac
+exit 0
+SH
+  cat > "$case_dir/fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "pr checks")
+    printf '%s\n' '[{"name":"build","bucket":"pass","state":"SUCCESS"}]'
+    exit 0
+    ;;
+  "pr view")
+    case " $* " in
+      *headRefOid*) printf '%s\n' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' ; exit 0 ;;
     esac
     ;;
 esac
@@ -86,11 +161,119 @@ SH
 
 run_pr_merge() {
   local case_dir=$1; shift
+  local rollup=green
+  [ -f "$case_dir/check-rollup" ] && rollup=$(cat "$case_dir/check-rollup")
   FM_ROOT_OVERRIDE="$ROOT" \
   FM_STATE_OVERRIDE="$case_dir/state" \
   FM_TEST_GH_AXI_LOG="$case_dir/gh-axi.log" \
+  FM_TEST_CHECK_ROLLUP="$rollup" \
   PATH="$case_dir/fakebin:$PATH" \
     "$PR_MERGE" "$@"
+}
+
+test_green_checks_proceed_to_merge() {
+  local case_dir rc
+  case_dir=$(make_case green-checks)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks_with_checks "$case_dir" green
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/31 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "green-checks: fm-pr-merge should proceed when checks pass"
+  grep -qxF 'pr checks 31 --repo example/repo' "$case_dir/gh-axi.log" \
+    || fail "green-checks: gh-axi pr checks was not invoked with number and --repo"
+  grep -qxF 'pr merge 31 --repo example/repo --squash' "$case_dir/gh-axi.log" \
+    || fail "green-checks: gh-axi pr merge was not invoked after green checks"
+  pass "fm-pr-merge proceeds when PR checks are green"
+}
+
+test_failing_checks_refuse_before_merge() {
+  local case_dir rc
+  case_dir=$(make_case failing-checks)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks_with_checks "$case_dir" failing
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/32 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "failing-checks: fm-pr-merge should refuse failing checks"
+  assert_grep 'checks not green: fail' "$case_dir/stderr" \
+    "failing-checks: refusal did not name the failing state"
+  assert_no_grep 'pr merge' "$case_dir/gh-axi.log" \
+    "failing-checks: gh-axi pr merge was invoked despite failing checks"
+  pass "fm-pr-merge refuses when PR checks are failing"
+}
+
+test_pending_checks_refuse_before_merge() {
+  local case_dir rc
+  case_dir=$(make_case pending-checks)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks_with_checks "$case_dir" pending
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/33 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "pending-checks: fm-pr-merge should refuse pending checks"
+  assert_grep 'checks not green: pending' "$case_dir/stderr" \
+    "pending-checks: refusal did not name the pending state"
+  assert_no_grep 'pr merge' "$case_dir/gh-axi.log" \
+    "pending-checks: gh-axi pr merge was invoked despite pending checks"
+  pass "fm-pr-merge refuses when PR checks are pending"
+}
+
+test_no_checks_configured_proceeds_to_merge() {
+  local case_dir rc
+  case_dir=$(make_case no-checks)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks_with_checks "$case_dir" none
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/34 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "no-checks: fm-pr-merge should proceed when no checks exist"
+  grep -qxF 'pr checks 34 --repo example/repo' "$case_dir/gh-axi.log" \
+    || fail "no-checks: gh-axi pr checks was not invoked with number and --repo"
+  grep -qxF 'pr merge 34 --repo example/repo --squash' "$case_dir/gh-axi.log" \
+    || fail "no-checks: gh-axi pr merge was not invoked when no checks exist"
+  pass "fm-pr-merge proceeds when the PR has no checks configured"
+}
+
+test_gh_checks_fallback_proceeds_when_green() {
+  local case_dir rc
+  case_dir=$(make_case gh-checks-fallback)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks_with_gh_checks_fallback "$case_dir"
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/35 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "gh-checks-fallback: fm-pr-merge should proceed when gh fallback reports green"
+  grep -qxF 'pr checks 35 --repo example/repo' "$case_dir/gh-axi.log" \
+    || fail "gh-checks-fallback: gh-axi pr checks was not attempted first"
+  grep -qxF 'pr merge 35 --repo example/repo --squash' "$case_dir/gh-axi.log" \
+    || fail "gh-checks-fallback: gh-axi pr merge was not invoked after green fallback checks"
+  pass "fm-pr-merge falls back to gh pr checks semantics when gh-axi checks cannot take repo args"
 }
 
 test_records_pr_and_head_before_merging() {
@@ -295,6 +478,11 @@ test_parses_pr_url_for_gh_axi() {
   pass "fm-pr-merge parses a GitHub PR URL into gh-axi number and --repo arguments"
 }
 
+test_green_checks_proceed_to_merge
+test_failing_checks_refuse_before_merge
+test_pending_checks_refuse_before_merge
+test_no_checks_configured_proceeds_to_merge
+test_gh_checks_fallback_proceeds_when_green
 test_records_pr_and_head_before_merging
 test_merge_failure_propagates_after_recording
 test_extra_merge_args_forwarded

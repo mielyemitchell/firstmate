@@ -24,6 +24,11 @@
 # Extra args must not include --repo or -R because the repo is parsed from the
 # PR URL.
 #
+# CI guard: records PR metadata first, then refuses to merge unless the PR check
+# rollup is green.
+# A PR with no checks configured is allowed; pending, failing, canceled, or
+# unknown check states are refused without an override flag.
+#
 # Usage: fm-pr-merge.sh <task-id> <pr-url> [-- <extra gh-axi pr merge args>]
 set -eu
 
@@ -76,11 +81,104 @@ reject_repo_overrides() {
   return 0
 }
 
+checks_output_means_no_checks() {
+  local output=$1
+  [ -z "$output" ] && return 0
+  case "$output" in
+    *"no checks"*|*"No checks"*|*"no check runs"*|*"No check runs"*) return 0 ;;
+  esac
+  return 1
+}
+
+check_summary_from_json() {
+  local output=$1 bad
+  [ "$output" = "[]" ] && return 0
+  checks_output_means_no_checks "$output" && return 0
+  if printf '%s\n' "$output" | grep -Eq '"bucket"[[:space:]]*:[[:space:]]*"fail"'; then
+    printf '%s\n' "fail"
+    return 1
+  fi
+  if printf '%s\n' "$output" | grep -Eq '"bucket"[[:space:]]*:[[:space:]]*"pending"'; then
+    printf '%s\n' "pending"
+    return 1
+  fi
+  if printf '%s\n' "$output" | grep -Eq '"bucket"[[:space:]]*:[[:space:]]*"cancel"'; then
+    printf '%s\n' "cancel"
+    return 1
+  fi
+  bad=$(printf '%s\n' "$output" | tr -d '\n' | sed -n 's/.*"bucket"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  case "$bad" in
+    pass|skipping) return 0 ;;
+    "") printf '%s\n' "unknown"; return 1 ;;
+    *) printf '%s\n' "$bad"; return 1 ;;
+  esac
+}
+
+check_summary_from_text() {
+  local output=$1
+  checks_output_means_no_checks "$output" && return 0
+  if printf '%s\n' "$output" | grep -Eiq '(^|[^[:alpha:]])(fail|failure|failing|error|timed_out|action_required)([^[:alpha:]]|$)'; then
+    printf '%s\n' "fail"
+    return 1
+  fi
+  if printf '%s\n' "$output" | grep -Eiq '(^|[^[:alpha:]])(pending|queued|waiting|in_progress|requested|expected)([^[:alpha:]]|$)'; then
+    printf '%s\n' "pending"
+    return 1
+  fi
+  if printf '%s\n' "$output" | grep -Eiq '(^|[^[:alpha:]])(cancel|cancelled|canceled)([^[:alpha:]]|$)'; then
+    printf '%s\n' "cancel"
+    return 1
+  fi
+  if printf '%s\n' "$output" | grep -Eiq '(^|[^[:alpha:]])(pass|success|skipping|skipped|neutral)([^[:alpha:]]|$)'; then
+    return 0
+  fi
+  printf '%s\n' "unknown"
+  return 1
+}
+
+gh_axi_checks_needs_fallback() {
+  local rc=$1 output=$2
+  [ "$rc" -eq 0 ] && return 1
+  case "$output" in
+    *"unknown flag: --repo"*|*"unknown flag: repo"*|*"Usage:"*|*"usage:"*) return 0 ;;
+  esac
+  return 1
+}
+
+assert_pr_checks_green() {
+  local repo=$1 output rc state
+  set +e
+  output=$(gh-axi pr checks "$PR_NUMBER" --repo "$repo" 2>&1)
+  rc=$?
+  set -e
+  if gh_axi_checks_needs_fallback "$rc" "$output"; then
+    set +e
+    output=$(gh pr checks "$PR_NUMBER" --repo "$repo" --json name,bucket,state 2>&1)
+    rc=$?
+    set -e
+    if state=$(check_summary_from_json "$output"); then
+      return 0
+    fi
+    echo "error: checks not green: $state; refusing to merge $URL" >&2
+    return 1
+  fi
+  if state=$(check_summary_from_text "$output"); then
+    if [ "$rc" -eq 0 ] || checks_output_means_no_checks "$output"; then
+      return 0
+    fi
+    echo "error: checks not green: unknown; refusing to merge $URL" >&2
+    return 1
+  fi
+  echo "error: checks not green: $state; refusing to merge $URL" >&2
+  return 1
+}
+
 parse_pr_url "$URL" || exit 1
 reject_repo_overrides "$@" || exit 1
 
 "$SCRIPT_DIR/fm-pr-check.sh" "$ID" "$URL"
 grep -qxF "pr=$URL" "$META" || { echo "error: fm-pr-check did not record pr=$URL in $META; refusing to merge" >&2; exit 1; }
+assert_pr_checks_green "$PR_OWNER/$PR_REPO" || exit 1
 
 merge_args=()
 if ! caller_has_merge_method "$@"; then
