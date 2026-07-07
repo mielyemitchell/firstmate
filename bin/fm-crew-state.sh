@@ -31,7 +31,12 @@
 #   3. Reconcile the status log: if its last line says needs-decision/blocked but
 #      the run-step shows the run moved on, the log is deterministically stale and
 #      is flagged superseded. A genuinely parked run plus a needs-decision log
-#      agree, and are reported as parked.
+#      agree, and are reported as parked. The same applies to a "done: ... checks
+#      green" log line during an active (working) run: it is trusted only if it
+#      can plausibly belong to THIS run - it names the run's own id, the run
+#      already has a ci step, or a ci step status is resolvable. Otherwise it is a
+#      leftover from an earlier run (e.g. a rebase restarted validation) and is
+#      flagged superseded rather than short-circuiting a fresh early run to done.
 #   4. No run for this crew (pre-validation, or kind=scout): fall back to the
 #      recorded backend's pane busy state, then the status log's last line.
 #   5. Missing meta or torn-down worktree: report unknown · none. If no run is
@@ -285,6 +290,17 @@ log_reports_ci_ready() {
   esac
 }
 
+log_mentions_run_id() {
+  local run_id note
+  run_id=$(strip_quotes "$(nm_field id)")
+  [ -n "$run_id" ] || return 1
+  note=$(log_note_of "$LOG_LINE")
+  case "$note" in
+    *"$run_id"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 nm_ci_step_status() {
   local row rest
   row=$(printf '%s\n' "$RUN_OUT" | grep -E '^[[:space:]]*ci,[[:space:]]*"?(running|fixing)"?[[:space:]]*,' | head -1)
@@ -308,6 +324,18 @@ nm_effective_ci_step_status() {
   if [ "${RUN_STATUS:-}" = ci ]; then
     printf 'running'
   fi
+}
+
+run_has_ci_step() {
+  printf '%s\n' "$RUN_OUT" | grep -Eq '^[[:space:]]*ci,[[:space:]]*'
+}
+
+ci_ready_log_can_belong_to_run() {
+  [ "$RUN_SOURCE" = coarse ] && return 0
+  log_mentions_run_id && return 0
+  [ -n "$CI_STEP_STATUS" ] || CI_STEP_STATUS=$(nm_effective_ci_step_status)
+  [ -n "$CI_STEP_STATUS" ] && return 0
+  run_has_ci_step
 }
 
 # Root cause of the PR #252 incident (2026-07): for a repo where merge is left
@@ -510,6 +538,10 @@ if [ "$HAVE_RUN" = 1 ]; then
   if [ "$RUN_STATE" = working ] && log_reports_ci_ready; then
     if [ "$RUN_SOURCE" = coarse ]; then
       emit "done" status-log "$(log_note_of "$LOG_LINE")${SEP}run still monitoring PR"
+    fi
+    if ! ci_ready_log_can_belong_to_run; then
+      RUN_DETAIL="$RUN_DETAIL${SEP}status-log superseded by active run"
+      emit "$RUN_STATE" run-step "$RUN_DETAIL"
     fi
     [ -n "$CI_STEP_STATUS" ] || CI_STEP_STATUS=$(nm_effective_ci_step_status)
     if [ "$RUN_STATUS" = fixing ]; then
