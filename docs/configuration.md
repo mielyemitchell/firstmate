@@ -306,4 +306,10 @@ FM_CRASH_BACKOFF=60                # seconds to wait after crossing the crash th
 FM_CRASH_NORMAL_SLEEP=5            # seconds to wait after an isolated watcher crash
 FM_LOG_MAX_BYTES=1048576           # daemon log size that triggers trimming
 FM_LOG_KEEP_LINES=2000             # daemon log lines kept when trimming
+# fm-usage-tripwire.sh (read-only watcher check for token/session usage bursts)
+FM_USAGE_WINDOW_MINUTES=60         # sliding window in minutes
+FM_USAGE_SESSION_THRESHOLD=50      # alarm when recent transcript-file count exceeds this
+FM_USAGE_OUTPUT_THRESHOLD=150000   # alarm when summed recent output tokens exceeds this
+FM_USAGE_CLAUDE_DIR=$HOME/.claude/projects   # Claude transcript root
+FM_USAGE_CODEX_DIR=$HOME/.codex/sessions     # Codex transcript root
 ```
