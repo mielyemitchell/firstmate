@@ -60,6 +60,8 @@ fm_fleet_freeze_refuse "watch" || exit 1
 # see bin/fm-backend.sh and docs/herdr-backend.md.
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-ack-lib.sh
+. "$SCRIPT_DIR/fm-ack-lib.sh"
 
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
@@ -399,6 +401,15 @@ while :; do
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
+
+  # Pending dispatch acknowledgements: fm-send --expect-ack records a target and
+  # deadline after a successful send. Any later status-file write by that target
+  # clears the entry. A missed deadline is appended to the normal durable wake
+  # queue once, then the row stays marked escalated so it does not spam.
+  ack_reason=$(fm_ack_scan_pending "$STATE" 2>/dev/null || true)
+  if [ -n "$ack_reason" ]; then
+    wake "$ack_reason"
+  fi
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
   # Time-based via .last-check mtime so the cadence survives watcher restarts.

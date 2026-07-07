@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Send one line of literal text to a crewmate endpoint, then Enter.
-# Usage: fm-send.sh <target> <text...>
+# Usage: fm-send.sh [--expect-ack <minutes>] <target> <text...>
 #   <target> must be either a firstmate task selector (fm-xyz), resolved
 #   through this home's state/<id>.meta, or an explicit well-formed backend
 #   target. fm-send refuses unresolved/bare guesses rather than falling back to
 #   a tmux window search, because a "successful" send to the wrong endpoint is
 #   worse than a loud failure.
+#   --expect-ack records a pending acknowledgement for a task/lane target after
+#   a successful text send. The target acknowledges by writing any status line;
+#   raw backend pane targets cannot use this flag because they have no status file.
 # Special keys instead of text: fm-send.sh <target> --key Enter
 # Key support is backend-specific: tmux/herdr support Escape, Enter, and C-c;
 # Orca currently supports Enter and C-c only, and rejects Escape.
@@ -60,6 +63,8 @@ fi
 . "$SCRIPT_DIR/fm-marker-lib.sh"
 # shellcheck source=bin/fm-freeze-lib.sh
 . "$SCRIPT_DIR/fm-freeze-lib.sh"
+# shellcheck source=bin/fm-ack-lib.sh
+. "$SCRIPT_DIR/fm-ack-lib.sh"
 
 fm_fleet_freeze_refuse "send" || exit 1
 FM_GUARD_CONTINUE_LINE='This is a supervision warning only; the requested message WILL still be sent.' "$SCRIPT_DIR/fm-guard.sh" || true
@@ -179,12 +184,63 @@ fm_send_resolve_target() {  # <raw-target>
   return 1
 }
 
-RAW_TARGET=$1
+EXPECT_ACK_MINUTES=
+case "${1:-}" in
+  --expect-ack)
+    if [ "$#" -lt 3 ]; then
+      echo "error: --expect-ack requires a positive integer minute count and a target" >&2
+      exit 1
+    fi
+    EXPECT_ACK_MINUTES=${2:-}
+    shift 2
+    ;;
+esac
+
+case "$EXPECT_ACK_MINUTES" in
+  ''|*[!0-9]*)
+    if [ -n "$EXPECT_ACK_MINUTES" ]; then
+      echo "error: --expect-ack requires a positive integer minute count" >&2
+      exit 1
+    fi
+    ;;
+  0)
+    echo "error: --expect-ack requires a positive integer minute count" >&2
+    exit 1
+    ;;
+esac
+
+RAW_TARGET=${1:-}
+[ -n "$RAW_TARGET" ] || { echo "error: missing target" >&2; exit 1; }
 fm_send_resolve_target "$RAW_TARGET" || exit 1
 T=$RESOLVED_TARGET
 shift
 
+if [ "${1:-}" = "--expect-ack" ]; then
+  if [ "$#" -lt 3 ]; then
+    echo "error: --expect-ack requires a positive integer minute count and message text" >&2
+    exit 1
+  fi
+  EXPECT_ACK_MINUTES=${2:-}
+  shift 2
+  case "$EXPECT_ACK_MINUTES" in
+    ''|*[!0-9]*|0)
+      echo "error: --expect-ack requires a positive integer minute count" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 fm_backend_validate "$TARGET_BACKEND" || exit 1
+
+if [ -n "$EXPECT_ACK_MINUTES" ]; then
+  case "$RAW_TARGET" in
+    fm-*) : ;;
+    *)
+      echo "error: cannot expect-ack a raw pane target '$RAW_TARGET'; use fm-<id> so the target has a status file" >&2
+      exit 1
+      ;;
+  esac
+fi
 
 # Mark a from-firstmate -> secondmate request. Only a bare `fm-<id>` target,
 # resolved through this home's meta and recording kind=secondmate, is marked: the
@@ -219,6 +275,18 @@ if [ "${1:-}" = "--key" ]; then
     exit 1
   fi
 else
+  ACK_SENT_AT=
+  ACK_DEADLINE=
+  ACK_PRE_SIG=
+  ACK_PRE_LINES=
+  ACK_TARGET_ID=
+  if [ -n "$EXPECT_ACK_MINUTES" ]; then
+    ACK_TARGET_ID=${RAW_TARGET#fm-}
+    ACK_SENT_AT=$(date +%s)
+    ACK_DEADLINE=$((ACK_SENT_AT + (EXPECT_ACK_MINUTES * 60)))
+    ACK_PRE_SIG=$(fm_ack_stat_sig "$STATE/$ACK_TARGET_ID.status")
+    ACK_PRE_LINES=$(fm_ack_line_count "$STATE/$ACK_TARGET_ID.status")
+  fi
   # Slash commands open a completion popup in some TUIs (verified on codex);
   # submitting too fast selects nothing, so give the popup time to settle before
   # the (retried) Enter. Codex opens the same kind of popup for a `$<skill>`
@@ -258,4 +326,7 @@ else
   # crewmate actually working instead of the stale idle pane. FM_SEND_SETTLE=0
   # disables it. Scoped to this path only, never the shared submit core.
   [ "${FM_SEND_SETTLE:-1}" = 0 ] || sleep "${FM_SEND_SETTLE:-1}"
+  if [ -n "$EXPECT_ACK_MINUTES" ]; then
+    fm_ack_record "$STATE" "$ACK_TARGET_ID" "$ACK_SENT_AT" "$ACK_DEADLINE" "$ACK_PRE_SIG" "$ACK_PRE_LINES" "$MARK_PREFIX$*"
+  fi
 fi
