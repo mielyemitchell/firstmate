@@ -75,8 +75,6 @@ tests/fm-watcher-lock.test.sh             # watcher singleton, lock-race, watch-
 tests/fm-turnend-guard.test.sh            # shared supervision predicate plus Claude Stop-hook scoping, loop guard, fail-open, and live watcher health tests
 tests/fm-watch-triage.test.sh             # always-on watcher triage: benign absorb, actionable surface, stale status-log override, wedge threshold, repeated wedge demand marker, heartbeat backstop, and afk one-shot coherence
 tests/fm-daemon.test.sh                   # sub-supervisor classifier, /afk presence-gating, max-defer, composer, fleet-freeze injection refusal, and fm-send submit tests
-tests/fm-freeze.test.sh                   # fm-freeze.sh on/status/off tests, spawn/send refusal while frozen, and the explicit FM_FLEET_FREEZE_BYPASS=1 one-command override
-tests/fm-fleet-map.test.sh                # fm-fleet-map.sh read-only tracked-state-vs-Herdr inventory tests: cwd/target matching and graceful Herdr-unavailable output
 tests/fm-usage-tripwire.test.sh           # fm-usage-tripwire.sh watcher-check tests: healthy silence, session-count and output-token breach alarms, mtime-window bounding, missing transcript dirs, and per-entry timestamp scoping on long-lived files
 tests/fm-send-settle.test.sh              # fm-send post-submit settle pause, tuning, disable, and --key bypass tests
 tests/fm-send-popup-settle.test.sh        # fm-send pre-Enter popup-settle selection for slash commands and codex $skill invocations
