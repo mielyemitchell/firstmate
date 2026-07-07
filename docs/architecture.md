@@ -44,7 +44,7 @@ Its supervisor injection path supports tmux and herdr panes, with `FM_SUPERVISOR
 Pane existence, busy checks, composer checks, capture, and verified submit route through `bin/fm-backend.sh`: tmux keeps the same submit core used by the tmux send backend, while herdr reuses its native busy state and structural composer classifier.
 Unsupported supervisor backends refuse at daemon startup.
 Stalled escalation delivery raises `state/.subsuper-inject-wedged` after `FM_MAX_DEFER_SECS` instead of silently deferring forever.
-`fm-send.sh` selects a pre-Enter popup-settle for slash commands and for codex `$...` skill invocations using the target's recorded `harness=` meta, then adds its own `FM_SEND_SETTLE` pause after successful text sends so immediate peeks catch the receiving turn starting; the sub-supervisor uses only the shared submit core and does not pay that post-submit pause.
+`fm-send.sh` selects a pre-Enter popup-settle for slash commands and for codex `$...` skill invocations using the target's recorded `harness=` meta, then adds its own `FM_SEND_SETTLE` pause after successful text sends so immediate peeks catch the receiving turn starting; the sub-supervisor uses only the shared submit core and does not pay that post-submit pause. Those same popup-risk sends also require a verified submit: an unreadable ("unknown") composer verdict, normally treated as sent, is instead a hard failure for slash commands and codex `$...` invocations, while plain text sends stay lenient on "unknown".
 
 ## Runtime session backends
 
