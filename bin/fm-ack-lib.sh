@@ -122,6 +122,23 @@ fm_ack_late_label() {  # <seconds>
   fi
 }
 
+fm_ack_prune_task() {  # <state> <id>
+  local state=$1 id=$2 file tmp rc
+  file="$state/.pending-acks"
+  [ -e "$file" ] || return 0
+  fm_ack_lock_acquire "$state" || return 1
+  tmp="$file.tmp.$$"
+  rc=0
+  grep -v "^${id}	" "$file" > "$tmp" 2>/dev/null || true
+  if [ -s "$tmp" ]; then
+    mv -f "$tmp" "$file" || rc=1
+  else
+    rm -f "$tmp" "$file" || rc=1
+  fi
+  fm_ack_lock_release
+  return "$rc"
+}
+
 fm_ack_scan_pending() {  # <state> [now]
   local state=$1 now=${2:-$(date +%s)} file tmp any id sent_at deadline pre_sig pre_lines escalated summary late label reason rc
   file="$state/.pending-acks"

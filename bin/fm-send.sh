@@ -215,21 +215,6 @@ fm_send_resolve_target "$RAW_TARGET" || exit 1
 T=$RESOLVED_TARGET
 shift
 
-if [ "${1:-}" = "--expect-ack" ]; then
-  if [ "$#" -lt 3 ]; then
-    echo "error: --expect-ack requires a positive integer minute count and message text" >&2
-    exit 1
-  fi
-  EXPECT_ACK_MINUTES=${2:-}
-  shift 2
-  case "$EXPECT_ACK_MINUTES" in
-    ''|*[!0-9]*|0)
-      echo "error: --expect-ack requires a positive integer minute count" >&2
-      exit 1
-      ;;
-  esac
-fi
-
 fm_backend_validate "$TARGET_BACKEND" || exit 1
 
 if [ -n "$EXPECT_ACK_MINUTES" ]; then
@@ -327,6 +312,6 @@ else
   # disables it. Scoped to this path only, never the shared submit core.
   [ "${FM_SEND_SETTLE:-1}" = 0 ] || sleep "${FM_SEND_SETTLE:-1}"
   if [ -n "$EXPECT_ACK_MINUTES" ]; then
-    fm_ack_record "$STATE" "$ACK_TARGET_ID" "$ACK_SENT_AT" "$ACK_DEADLINE" "$ACK_PRE_SIG" "$ACK_PRE_LINES" "$MARK_PREFIX$*"
+    fm_ack_record "$STATE" "$ACK_TARGET_ID" "$ACK_SENT_AT" "$ACK_DEADLINE" "$ACK_PRE_SIG" "$ACK_PRE_LINES" "$MARK_PREFIX$*" || true
   fi
 fi
