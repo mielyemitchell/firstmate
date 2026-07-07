@@ -156,6 +156,61 @@ ROWS
   pass "bootstrap enforces no-mistakes minimum version"
 }
 
+add_hanging_no_mistakes() {
+  local fakebin=$1 sleep_secs=$2
+  cat > "$fakebin/no-mistakes" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = --version ]; then
+  sleep $sleep_secs
+  printf '%s\n' 'no-mistakes version v1.31.2 (fake)'
+  exit 0
+fi
+exit 0
+SH
+  chmod +x "$fakebin/no-mistakes"
+}
+
+# A dead/unreachable no-mistakes daemon leaves `no-mistakes --version` hanging
+# forever (no built-in connect timeout: 2026-07-04 gate run
+# 01KWQPPBVS34GJ5TKC2CQTH7VW wedged 3+ hours in tests/fm-fleet-sync.test.sh this
+# way). fm-bootstrap.sh bounds every no-mistakes invocation with
+# FM_NO_MISTAKES_PROBE_TIMEOUT (default 3s) so a hung probe degrades to the
+# same MISSING line as an absent binary instead of wedging bootstrap.
+test_no_mistakes_probe_timeout() {
+  local missing case_dir fakebin out start elapsed
+  missing='MISSING: no-mistakes (install: curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh)'
+
+  # A fast, healthy probe answers immediately and is unaffected by the bound.
+  case_dir="$TMP_ROOT/no-mistakes-probe-fast"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_tasks_axi "$fakebin" "0.1.1"
+  start=$SECONDS
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  elapsed=$((SECONDS - start))
+  [ -z "$out" ] || fail "healthy no-mistakes probe: expected silence, got: $out"
+  [ "$elapsed" -lt 2 ] || fail "healthy no-mistakes probe: expected a fast return, took ${elapsed}s"
+
+  # A hung probe (simulating a dead/unreachable daemon) must be bounded by
+  # FM_NO_MISTAKES_PROBE_TIMEOUT and degrade exactly like a missing tool.
+  case_dir="$TMP_ROOT/no-mistakes-probe-hang"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_tasks_axi "$fakebin" "0.1.1"
+  add_hanging_no_mistakes "$fakebin" 999
+  start=$SECONDS
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_NO_MISTAKES_PROBE_TIMEOUT=1 "$ROOT/bin/fm-bootstrap.sh")
+  elapsed=$((SECONDS - start))
+  [ "$out" = "$missing" ] || fail "hung no-mistakes probe: expected '$missing', got: $out"
+  [ "$elapsed" -lt 10 ] || fail "hung no-mistakes probe: expected a bounded return, took ${elapsed}s"
+
+  pass "bootstrap bounds no-mistakes probes and degrades a hung daemon to MISSING"
+}
+
 test_orca_backend_gates_orca_tool_only_when_selected() {
   local case_dir fakebin out missing_orca
   missing_orca="MISSING: orca (install: brew install orca  # or the platform's package manager)"
@@ -228,6 +283,7 @@ ROWS
 
 test_bootstrap_reporting
 test_no_mistakes_min_version
+test_no_mistakes_probe_timeout
 test_orca_backend_gates_orca_tool_only_when_selected
 test_crew_dispatch_active_rules_are_surfaced
 test_crew_dispatch_validation
