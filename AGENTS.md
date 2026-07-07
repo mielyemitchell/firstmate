@@ -457,6 +457,8 @@ A captain typing directly into the secondmate's window is unmarked and stays a c
 Do not spawn a direct crewmate for work that belongs to a secondmate scope unless the secondmate is blocked or the captain explicitly redirects it.
 If no secondmate scope fits, proceed in the main firstmate or create a new secondmate with the captain when that domain should become persistent.
 When you create a new secondmate, hand its in-scope queued items off from the main backlog into its home with `bin/fm-backlog-handoff.sh` so it owns its domain's queue from day one (section 6).
+Route to a secondmate when the work's subject matches the scope's named domain nouns and the work is that domain's normal lifecycle inside its repos; route to main-firstmate crewmates when the work is fleet tooling, cross-domain, or a repo no scope names.
+When two scopes plausibly fit, the more specific scope wins over a broader catch-all; when still tied, ask the captain one line.
 
 Then classify the shape:
 
@@ -468,7 +470,8 @@ Then classify readiness:
 - **Dispatchable:** no overlap with in-flight tasks. Dispatch immediately. There is no concurrency cap.
 - **Blocked:** touches the same files or subsystem as an in-flight task, or explicitly depends on an unmerged PR. Record it in `data/backlog.md` with `blocked-by: <id>` and tell the captain what work is waiting and why. Scout tasks are read-mostly and almost never block on anything.
 
-Keep dependency judgment coarse: same repo plus overlapping area means serialize; everything else runs parallel.
+Same repo and (same top-level directory or same named subsystem in the task titles) means serialize with `blocked-by`; same repo but clearly disjoint areas means parallel is fine; different repos always run parallel.
+When uncertain after reading both task lines, serialize - a false serialize costs latency, a false parallel costs a rebase round or a conflict.
 For `no-mistakes` projects, the pipeline rebase step absorbs mild overlaps; for other modes, have the crewmate rebase before review or merge if needed.
 
 Write the brief per section 11.
@@ -550,6 +553,7 @@ This do-not-fight rule does not license evidence commits in firstmate's own repo
 
 **yolo (orthogonal).** With `yolo=off` (default) every approval is the captain's: ask-user findings, PR merges, the local-only merge.
 With `yolo=on`, firstmate makes those calls itself without asking - resolve ask-user findings on your judgment, and run `bin/fm-pr-merge.sh <id> <full GitHub PR URL>` / `bin/fm-merge-local.sh` once the work is green/approved - EXCEPT anything destructive, irreversible, or security-sensitive, which still escalates to the captain.
+"Routine" means reversible by a follow-up PR, inside the task's stated scope, no schema or data migration, no auth or permission surface, no secret handling, no deletion of user data, and CI green; a finding failing any one clause escalates even under yolo.
 Never merge a red PR even under yolo.
 `bin/fm-pr-merge.sh` always records `pr=` and records `pr_head=` when available before merging, parses the full `https://github.com/<owner>/<repo>/pull/<n>` URL into `gh-axi pr merge <n> --repo <owner>/<repo>`, and defaults to `--squash` unless an explicit merge method is forwarded after `--`; this holds even on a repo with no PR CI where the "checks green" signal that normally triggers `bin/fm-pr-check.sh` never fires - do not call `gh-axi pr merge` directly for a task's PR, or the recording step can be silently skipped and a later `fm-teardown.sh` has nothing to verify a squash merge against.
 The script itself enforces the never-merge-a-red-PR rule: before merging it asserts the PR's check rollup is green, allowing a PR with no checks configured but refusing pending, failing, canceled, or unknown states with no override flag, so this holds even under yolo.
@@ -703,6 +707,8 @@ On wake, in order of cheapness:
 5. `heartbeat:` a heartbeat wake now reaches you only when the watcher's bash fleet-scan caught a captain-relevant status the per-wake path missed (no-change heartbeats are absorbed in bash, never surfaced), so treat it as "something turned up" and review the whole fleet: read each crewmate's current state with `bin/fm-crew-state.sh <id>` (the cheap first read - it reconciles the authoritative run-step over a possibly-stale status-log line, so a crewmate whose gate you already resolved no longer reads as still parked), peek panes that look off, check PR-ready tasks for merge, reconcile data/backlog.md, then re-arm the watcher.
    Do not report that the fleet is unchanged.
 
+An `unknown` read from `bin/fm-crew-state.sh` (no matching run, no pane) is a possibly dead endpoint, not a state to move past on any of the wakes above: check the recorded backend endpoint per the recovery procedure (section 5 step 6), and if dead, reconcile via recovery-by-kind; never absorb it silently.
+
 When a task reaches a terminal state on any of these wakes (a `done`/merge `check:`, a `failed` signal, a scout report, a local-only merge), and X mode is enabled, load `fmx-respond` (section 13) and post the X-mention's **final** completion follow-up if that task is X-linked: `bin/fm-x-followup.sh --check <id>` then `bin/fm-x-followup.sh <id> --final --text-file <path>`, so the link always clears here regardless of how many of the up-to-three follow-ups were already spent on earlier milestones.
 When any wake's status reports a merged PR naming a project this home also has cloned under `projects/`, run `bin/fm-fleet-sync.sh <project-name>` for that project as part of handling the wake, so the primary's clone never sits stale until the next session start or teardown.
 
@@ -714,6 +720,7 @@ Each task's backend live-task inventory is the ground truth (tmux when `backend=
 For `kind=secondmate`, an idle pane is healthy.
 A secondmate may be sitting on its own watcher with no visible pane changes, so parent supervision uses status writes plus heartbeat review, not pane-staleness.
 `fm-watch.sh` therefore skips stale-pane wakes for windows whose meta records `kind=secondmate`.
+During heartbeat review, a `kind=secondmate` task whose recorded endpoint is DEAD - not merely quiet - is a recovery case immediately, not something to leave for the next heartbeat; endpoint presence is cheap to check even though pane-content staleness stays skipped for secondmates.
 This exception is narrow: ordinary crewmates still trip stale detection when their pane stops changing without a busy signature.
 
 **Watcher liveness is guarded, not just disciplined.**
