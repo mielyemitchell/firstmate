@@ -94,7 +94,7 @@ tests/fm-tangle-guard.test.sh             # primary-checkout tangle detection, r
 tests/fm-freeze.test.sh                   # fm-freeze.sh on/off/status toggling, spawn/send refusal while frozen, and explicit one-command FM_FLEET_FREEZE_BYPASS tests
 tests/fm-fleet-map.test.sh                # fm-fleet-map.sh read-only tracked-state-to-visible-Herdr-agent mapping, exact-target-vs-cwd-only matching, and Herdr-unavailable fallback tests
 tests/fm-reconcile-stale.test.sh          # fm-reconcile-stale.sh dry-run reporting, --clean --yes refusals (missing --yes, unlanded work, live endpoint, fleet freeze, secondmate/scout carve-outs), and clean-removes-only-volatile-state tests
-tests/fm-brief.test.sh                    # fm-brief.sh bash -n parse regression guard (issue #166) and clean no-mistakes/direct-PR/local-only brief generation tests
+tests/fm-brief.test.sh                    # fm-brief.sh bash -n parse regression guard (issue #166), clean no-mistakes/direct-PR/local-only brief generation, and ship/scout never-restart-shared-daemon rule tests
 tests/fm-spawn-batch.test.sh              # batch dispatch and FM_HOME project-path scoping tests
 tests/fm-spawn-dispatch-profile.test.sh   # concrete dispatch profile flags: active-profile backstop, harness/model/effort meta, launch templates, batch forwarding, and secondmate exemption
 tests/fm-update.test.sh                   # fast-forward-only self-update, reread, nudge, dedup, and skip-safety tests

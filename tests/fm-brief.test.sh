@@ -76,6 +76,38 @@ test_no_mistakes_dod_wording() {
   pass "fm-brief.sh: no-mistakes DOD wording avoids the apostrophe regression"
 }
 
+# The shared no-mistakes daemon serves every lane/home; a crewmate that stops
+# or restarts it kills every other lane's in-flight validation run. Both
+# generated scaffolds (ship and scout) must carry the never-restart rule so a
+# crewmate escalates instead of self-troubleshooting a daemon error.
+test_ship_brief_has_daemon_rule() {
+  local home id brief
+  home="$TMP_ROOT/ship-daemon-home"
+  mkdir -p "$home/data"
+  id="brief-daemonrule-c1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "ship brief was not scaffolded"
+  assert_grep "Never stop, restart, or update the shared \`no-mistakes\` daemon" "$brief" \
+    "ship brief missing the never-restart-shared-daemon rule"
+  pass "fm-brief.sh: ship brief carries the never-restart-shared-daemon rule"
+}
+
+test_scout_brief_has_daemon_rule() {
+  local home id brief
+  home="$TMP_ROOT/scout-daemon-home"
+  mkdir -p "$home/data"
+  id="brief-daemonrule-c2"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --scout >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "scout brief was not scaffolded"
+  assert_grep "Never stop, restart, or update the shared \`no-mistakes\` daemon" "$brief" \
+    "scout brief missing the never-restart-shared-daemon rule"
+  pass "fm-brief.sh: scout brief carries the never-restart-shared-daemon rule"
+}
+
 test_script_parses
 test_ship_modes_generate_clean_briefs
 test_no_mistakes_dod_wording
+test_ship_brief_has_daemon_rule
+test_scout_brief_has_daemon_rule
