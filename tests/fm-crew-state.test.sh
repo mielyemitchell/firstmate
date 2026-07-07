@@ -446,6 +446,23 @@ test_ci_ready_done_log_beats_monitoring_run() {
   pass "ci-ready status log beats monitoring run"
 }
 
+test_stale_ci_ready_log_over_fresh_early_run_stays_working() {
+  reset_fakes
+  local d; d=$(new_case ci-ready-fresh-early)
+  make_repo_on_branch "$d/wt" fm/feat-freshearly
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-freshearly.meta" "window=fm:fm-feat-freshearly" "worktree=$d/wt" "kind=ship"
+  printf 'done: PR https://github.com/o/r/pull/2 checks green\n' > "$d/state/feat-freshearly.status"
+  FM_FAKE_AXI_STATUS="$(run_running fm/feat-freshearly)"
+  FM_FAKE_CI_LOGS="all CI checks passed - still monitoring until merged or closed"
+  local out; out=$(run_crew_state "$d" feat-freshearly)
+  assert_contains "$out" "state: working" "fresh early run wins over stale checks-green log"
+  assert_contains "$out" "source: run-step" "fresh early run remains run-step sourced"
+  assert_contains "$out" "status-log superseded by active run" "stale checks-green log is flagged superseded"
+  assert_not_contains "$out" "state: done" "stale checks-green log must not produce done"
+  pass "stale checks-green status log does not mask a fresh early run"
+}
+
 # Regression for the PR #252 incident: the crew's own status log never got a
 # "done: ... checks green" line (log_reports_ci_ready above does not apply),
 # but the ci step's log tail shows CI is actually green and only waiting on
@@ -1055,6 +1072,7 @@ test_genuine_parked_not_superseded
 test_scalar_gate_parked_not_superseded
 test_gate_block_parked_not_superseded
 test_ci_ready_done_log_beats_monitoring_run
+test_stale_ci_ready_log_over_fresh_early_run_stays_working
 test_ci_monitoring_checks_green_surfaces_done
 test_top_level_ci_checks_green_surfaces_done
 test_ci_monitoring_no_checks_terminal_surfaces_done
