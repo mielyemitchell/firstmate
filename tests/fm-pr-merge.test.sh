@@ -100,6 +100,14 @@ case "${1:-} ${2:-}" in
       none)
         printf 'checks: "0 passed, 0 failed — this PR has no CI checks configured"\n'
         ;;
+      cancelled)
+        # gh-axi's own classification buckets CANCELLED into the same "skip"
+        # category as an ordinary conditional skip, so its text summary and
+        # per-check rows report this exactly like a normal skip.
+        printf 'summary: "0 passed, 0 failed, 1 skipped, 1 total"\n'
+        printf 'checks[1]{name,conclusion}:\n'
+        printf '  build,skip\n'
+        ;;
     esac
     ;;
 esac
@@ -114,6 +122,7 @@ case "${1:-} ${2:-}" in
       failing) printf '[{"name":"build","bucket":"fail","state":"FAILURE"}]\n' ; exit 1 ;;
       pending) printf '[{"name":"build","bucket":"pending","state":"PENDING"}]\n' ; exit 8 ;;
       none) printf '[]\n' ;;
+      cancelled) printf '[{"name":"build","bucket":"cancel","state":"CANCELLED"}]\n' ;;
     esac
     ;;
   "pr view")
@@ -269,6 +278,27 @@ test_no_checks_configured_proceeds_to_merge() {
   grep -qxF 'pr merge 34 --repo example/repo --squash' "$case_dir/gh-axi.log" \
     || fail "no-checks: gh-axi pr merge was not invoked when no checks exist"
   pass "fm-pr-merge proceeds when the PR has no checks configured"
+}
+
+test_cancelled_checks_refuse_before_merge() {
+  local case_dir rc
+  case_dir=$(make_case cancelled-checks)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks_with_checks "$case_dir" cancelled
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/36 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "cancelled-checks: fm-pr-merge should refuse a cancelled check even though gh-axi reports it as a plain skip"
+  assert_grep 'checks not green: cancel' "$case_dir/stderr" \
+    "cancelled-checks: refusal did not name the cancelled state"
+  assert_no_grep 'pr merge' "$case_dir/gh-axi.log" \
+    "cancelled-checks: gh-axi pr merge was invoked despite a cancelled check"
+  pass "fm-pr-merge refuses when a check was cancelled, even though gh-axi's own summary reports it as skipped"
 }
 
 test_gh_checks_fallback_proceeds_when_green() {
@@ -498,6 +528,7 @@ test_green_checks_proceed_to_merge
 test_failing_checks_refuse_before_merge
 test_pending_checks_refuse_before_merge
 test_no_checks_configured_proceeds_to_merge
+test_cancelled_checks_refuse_before_merge
 test_gh_checks_fallback_proceeds_when_green
 test_records_pr_and_head_before_merging
 test_merge_failure_propagates_after_recording

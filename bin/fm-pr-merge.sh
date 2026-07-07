@@ -151,6 +151,27 @@ gh_axi_checks_needs_fallback() {
   return 1
 }
 
+assert_no_cancelled_checks() {
+  local repo=$1 output rc
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "error: checks not green: cannot verify checks are not cancelled without gh; refusing to merge $URL" >&2
+    return 1
+  fi
+  set +e
+  output=$(gh pr checks "$PR_NUMBER" --repo "$repo" --json name,bucket,state 2>&1)
+  rc=$?
+  set -e
+  if [ "$rc" -ne 0 ]; then
+    echo "error: checks not green: unable to verify checks are not cancelled ($output); refusing to merge $URL" >&2
+    return 1
+  fi
+  if printf '%s\n' "$output" | grep -Eq '"bucket"[[:space:]]*:[[:space:]]*"cancel"'; then
+    echo "error: checks not green: cancel; refusing to merge $URL" >&2
+    return 1
+  fi
+  return 0
+}
+
 assert_pr_checks_green() {
   local repo=$1 output rc state
   set +e
@@ -168,15 +189,23 @@ assert_pr_checks_green() {
     echo "error: checks not green: $state; refusing to merge $URL" >&2
     return 1
   fi
-  if state=$(check_summary_from_text "$output"); then
-    if [ "$rc" -eq 0 ] || checks_output_means_no_checks "$output"; then
-      return 0
-    fi
+  if ! state=$(check_summary_from_text "$output"); then
+    echo "error: checks not green: $state; refusing to merge $URL" >&2
+    return 1
+  fi
+  if checks_output_means_no_checks "$output"; then
+    return 0
+  fi
+  if [ "$rc" -ne 0 ]; then
     echo "error: checks not green: unknown; refusing to merge $URL" >&2
     return 1
   fi
-  echo "error: checks not green: $state; refusing to merge $URL" >&2
-  return 1
+  # gh-axi's own classification buckets a CANCELLED conclusion into the same
+  # "skip" category as a normal conditional skip, so its summary/per-check
+  # output cannot distinguish the two. Only the real `gh` CLI's bucket field
+  # separates "cancel" from "skipping", so that is the authoritative source
+  # for this specific check.
+  assert_no_cancelled_checks "$repo"
 }
 
 parse_pr_url "$URL" || exit 1
