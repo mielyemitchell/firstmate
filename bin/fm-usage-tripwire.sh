@@ -105,6 +105,7 @@ fi
 tmp_files=${TMPDIR:-/tmp}/fm-usage-tripwire-files.$$
 # shellcheck disable=SC2329
 cleanup() {
+  # shellcheck disable=SC2317  # invoked indirectly via trap below
   rm -f "$tmp_files"
 }
 trap cleanup EXIT
