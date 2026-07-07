@@ -160,6 +160,7 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 ## Toolchain
 
 On session start the first mate detects what its required toolchain is missing or too old (tmux, node, gh, treehouse with durable lease support, no-mistakes v1.31.2 or newer, gh-axi, chrome-devtools-axi, lavish-axi), lists it with the exact install commands, and installs only after you say go.
+Every `no-mistakes` invocation inside bootstrap is bounded by `FM_NO_MISTAKES_PROBE_TIMEOUT` seconds (default 3): a dead or unreachable no-mistakes daemon has no built-in connect timeout, so a bare probe can hang forever, and a timed-out probe degrades to the same `MISSING: no-mistakes` line as an absent binary instead of wedging bootstrap.
 When bootstrap resolves `backend=orca` from `FM_BACKEND` or `config/backend`, it requires `orca`, keeps the universal `node` requirement, and skips `tmux` and `treehouse`.
 When `config/crew-dispatch.json` exists, bootstrap also requires `jq` for dispatch profile validation.
 When X mode is opted in, bootstrap also requires `curl` and `jq` before arming the relay poll shim.
