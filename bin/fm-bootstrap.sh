@@ -209,9 +209,11 @@ NO_MISTAKES_PROBE_TIMEOUT_DEFAULT=3
 # timeout, so a bare invocation can hang forever and wedge bootstrap with it.
 # Polls at 0.1s resolution so a healthy probe (normally milliseconds) returns
 # immediately instead of paying a whole-second polling tax. Prints captured
-# stdout and returns the command's exit status on a clean, timely exit; kills
-# the still-running process group and returns 1 on timeout, exactly like a
-# missing tool to every caller.
+# stdout and returns the command's exit status on a clean, timely exit; on
+# timeout escalates TERM -> short sleep -> KILL against the process group
+# (mirroring fm-crew-state.sh's escalation for the same class of problem) so a
+# probe that ignores SIGTERM cannot re-wedge bootstrap, and returns 1 exactly
+# like a missing tool to every caller.
 no_mistakes_bounded() {
   local timeout tmp monitor_was_on pid tries max_tries rc
   timeout=${FM_NO_MISTAKES_PROBE_TIMEOUT:-$NO_MISTAKES_PROBE_TIMEOUT_DEFAULT}
@@ -228,6 +230,10 @@ no_mistakes_bounded() {
     tries=$((tries + 1))
     if [ "$tries" -ge "$max_tries" ]; then
       kill -TERM "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+      sleep 0.2
+      if jobs -r -p | grep -qx "$pid"; then
+        kill -KILL "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+      fi
       wait "$pid" 2>/dev/null || true
       [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
       rm -f "$tmp"

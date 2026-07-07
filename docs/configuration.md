@@ -280,6 +280,7 @@ FM_STALE_ESCALATE_SECS=240         # idle seconds before a provably-working stal
 FM_WEDGE_DEMAND_INSPECT_COUNT=3    # consecutive provably-working stale escalations on the same unchanged pane before demand-deep-inspection is added
 FM_WATCH_TRIAGE_LOG_MAX_BYTES=262144   # size cap for the watcher's absorbed-wake debug log
 FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT=20   # seconds allowed for bootstrap's best-effort clone refresh
+FM_NO_MISTAKES_PROBE_TIMEOUT=3   # seconds allowed per no-mistakes --version probe inside fm-bootstrap.sh before it degrades to the MISSING line
 FM_FLEET_PRUNE=1        # set to 0 to skip pruning local branches whose upstream is gone
 FM_FLEET_FREEZE_BYPASS=  # set to 1 to bypass an active fleet freeze for one deliberate command (spawn, send, watch, watch-arm, daemon inject, or reconcile-stale --clean)
 FM_FLEET_MAP_HERDR_JSON= # test/diagnostic override: parse this saved `herdr agent list` JSON fixture instead of calling herdr, for fm-fleet-map.sh and fm-reconcile-stale.sh
