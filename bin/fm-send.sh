@@ -280,10 +280,16 @@ else
   # starts ordinary text ("$5/month", "$HOME"), so a universal `$` rule would
   # needlessly slow plain text to claude/opencode/pi. The target backend's
   # verified submit retry still backs the settle up either way.
+  require_verified_submit=0
   case "$*" in
-    /*) settle=1.2 ;;
+    /*) settle=1.2; require_verified_submit=1 ;;
     \$*)
-      if [ "$TARGET_HARNESS" = codex ]; then settle=1.2; else settle=0.3; fi
+      if [ "$TARGET_HARNESS" = codex ]; then
+        settle=1.2
+        require_verified_submit=1
+      else
+        settle=0.3
+      fi
       ;;
     *) settle=0.3 ;;
   esac
@@ -303,6 +309,12 @@ else
     send-failed)
       echo "error: text not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
       exit 1
+      ;;
+    unknown)
+      if [ "$require_verified_submit" = 1 ]; then
+        echo "error: text submission to $T could not be verified (popup-risk send reported unknown; tried $RESOLUTION_TRIED)" >&2
+        exit 1
+      fi
       ;;
   esac
   # Submit landed (verdict was not pending/send-failed). The cleared composer only
