@@ -160,6 +160,7 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 ## Toolchain
 
 On session start the first mate detects what its required toolchain is missing or too old (tmux, node, gh, treehouse with durable lease support, no-mistakes v1.31.2 or newer, gh-axi, chrome-devtools-axi, lavish-axi), lists it with the exact install commands, and installs only after you say go.
+Every `no-mistakes` invocation inside bootstrap is bounded by `FM_NO_MISTAKES_PROBE_TIMEOUT` seconds (default 3): a dead or unreachable no-mistakes daemon has no built-in connect timeout, so a bare probe can hang forever, and a timed-out probe degrades to the same `MISSING: no-mistakes` line as an absent binary instead of wedging bootstrap.
 When bootstrap resolves `backend=orca` from `FM_BACKEND` or `config/backend`, it requires `orca`, keeps the universal `node` requirement, and skips `tmux` and `treehouse`.
 When `config/crew-dispatch.json` exists, bootstrap also requires `jq` for dispatch profile validation.
 When X mode is opted in, bootstrap also requires `curl` and `jq` before arming the relay poll shim.
@@ -280,6 +281,7 @@ FM_STALE_ESCALATE_SECS=240         # idle seconds before a provably-working stal
 FM_WEDGE_DEMAND_INSPECT_COUNT=3    # consecutive provably-working stale escalations on the same unchanged pane before demand-deep-inspection is added
 FM_WATCH_TRIAGE_LOG_MAX_BYTES=262144   # size cap for the watcher's absorbed-wake debug log
 FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT=20   # seconds allowed for bootstrap's best-effort clone refresh
+FM_NO_MISTAKES_PROBE_TIMEOUT=3   # seconds allowed per no-mistakes --version probe inside fm-bootstrap.sh before it degrades to the MISSING line
 FM_FLEET_PRUNE=1        # set to 0 to skip pruning local branches whose upstream is gone
 FM_FLEET_FREEZE_BYPASS=  # set to 1 to bypass an active fleet freeze for one deliberate command (spawn, send, watch, watch-arm, daemon inject, or reconcile-stale --clean)
 FM_FLEET_MAP_HERDR_JSON= # test/diagnostic override: parse this saved `herdr agent list` JSON fixture instead of calling herdr, for fm-fleet-map.sh and fm-reconcile-stale.sh

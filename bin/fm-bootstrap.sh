@@ -29,7 +29,10 @@
 #          treehouse is also MISSING when its installed version lacks
 #          "treehouse get --lease" support.
 #          no-mistakes is also MISSING when its installed version is older than
-#          1.31.2.
+#          1.31.2. Every no-mistakes invocation is bounded by
+#          FM_NO_MISTAKES_PROBE_TIMEOUT seconds (default 3): a dead or
+#          unreachable daemon degrades to the same MISSING line as an absent
+#          binary instead of hanging bootstrap.
 #          tasks-axi is the default backlog-management backend. It is reported
 #          as TASKS_AXI: available when compatible (0.1.1+). Without
 #          config/backlog-backend=manual, a missing or incompatible tasks-axi is
@@ -199,10 +202,57 @@ treehouse_supports_lease() {
   treehouse get --help 2>&1 | grep -Eq '(^|[^[:alnum:]_-])--lease([^[:alnum:]_-]|$)'
 }
 
+NO_MISTAKES_PROBE_TIMEOUT_DEFAULT=3
+
+# Run `no-mistakes "$@"` bounded by FM_NO_MISTAKES_PROBE_TIMEOUT seconds
+# (default 3). A dead or unreachable no-mistakes daemon has no built-in connect
+# timeout, so a bare invocation can hang forever and wedge bootstrap with it.
+# Polls at 0.1s resolution so a healthy probe (normally milliseconds) returns
+# immediately instead of paying a whole-second polling tax. Prints captured
+# stdout and returns the command's exit status on a clean, timely exit; on
+# timeout escalates TERM -> short sleep -> KILL against the process group
+# (mirroring fm-crew-state.sh's escalation for the same class of problem) so a
+# probe that ignores SIGTERM cannot re-wedge bootstrap, and returns 1 exactly
+# like a missing tool to every caller.
+no_mistakes_bounded() {
+  local timeout tmp monitor_was_on pid tries max_tries rc
+  timeout=${FM_NO_MISTAKES_PROBE_TIMEOUT:-$NO_MISTAKES_PROBE_TIMEOUT_DEFAULT}
+  case "$timeout" in ''|*[!0-9]*) timeout=$NO_MISTAKES_PROBE_TIMEOUT_DEFAULT ;; esac
+  tmp=$(mktemp "${TMPDIR:-/tmp}/fm-no-mistakes-probe.XXXXXX" 2>/dev/null) || return 1
+  monitor_was_on=0
+  case $- in *m*) monitor_was_on=1 ;; esac
+  set -m 2>/dev/null || true
+  no-mistakes "$@" >"$tmp" 2>/dev/null &
+  pid=$!
+  tries=0
+  max_tries=$((timeout * 10))
+  while jobs -r -p | grep -qx "$pid"; do
+    tries=$((tries + 1))
+    if [ "$tries" -ge "$max_tries" ]; then
+      kill -TERM "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+      sleep 0.2
+      if jobs -r -p | grep -qx "$pid"; then
+        kill -KILL "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+      fi
+      wait "$pid" 2>/dev/null || true
+      [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
+      rm -f "$tmp"
+      return 1
+    fi
+    sleep 0.1
+  done
+  wait "$pid" 2>/dev/null
+  rc=$?
+  [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
+  cat "$tmp"
+  rm -f "$tmp"
+  return $rc
+}
+
 no_mistakes_version_parts() {
   local output
   command -v no-mistakes >/dev/null 2>&1 || return 1
-  output=$(no-mistakes --version 2>/dev/null) || return 1
+  output=$(no_mistakes_bounded --version) || return 1
   printf '%s\n' "$output" | sed -nE 's/.*[vV]?([0-9]+)\.([0-9]+)\.([0-9]+).*/\1 \2 \3/p' | head -n 1
 }
 
