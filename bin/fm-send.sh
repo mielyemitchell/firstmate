@@ -18,7 +18,11 @@
 # submitted/cleared composer or an inconclusive send. If a swallowed Enter is
 # positively confirmed (the text is still sitting in the composer after all
 # retries), fm-send exits NON-ZERO so the caller knows the steer did not land
-# instead of silently leaving an unsubmitted instruction.
+# instead of silently leaving an unsubmitted instruction. An unreadable
+# ("unknown") pane is normally treated as sent, EXCEPT for popup-risk sends
+# (slash commands, and codex `$...` skill invocations), which hard-fail on
+# unknown too, since those completion popups make an unverified send more
+# likely to have actually landed on the wrong element.
 # Submission dispatches through the target's recorded backend; the tmux adapter
 # shares its composer/submit core with the away-mode daemon via bin/fm-tmux-lib.sh.
 # Tune with FM_SEND_RETRIES (default 3) / FM_SEND_SLEEP (0.4).
@@ -295,8 +299,11 @@ else
   esac
   retries=${FM_SEND_RETRIES:-3}
   sleep_s=${FM_SEND_SLEEP:-0.4}
-  # Type once, submit, verify. Lenient: only a positively-confirmed swallow
-  # (text still in the composer) is an error; an unreadable pane is assumed sent.
+  # Type once, submit, verify. Lenient by default: only a positively-confirmed
+  # swallow (text still in the composer) is an error; an unreadable pane is
+  # assumed sent. Popup-risk sends (require_verified_submit=1, set above for
+  # slash commands and codex `$...` invocations) are the exception: those also
+  # fail on an unreadable ("unknown") verdict, since a plain-text send does not.
   if ! verdict=$(fm_backend_send_text_submit "$TARGET_BACKEND" "$T" "$MARK_PREFIX$*" "$retries" "$sleep_s" "$settle" "$EXPECTED_LABEL"); then
     echo "error: text not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
     exit 1
