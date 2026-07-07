@@ -101,9 +101,10 @@ state/               volatile runtime signals; gitignored
   x-outbox/          generated X-mode dry-run reply and dismiss previews; inspect it when FMX_DRY_RUN is set (section 14)
   x-poll.error       generated X-mode relay diagnostic dedupe marker
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
+  .pending-acks      durable fm-send --expect-ack rows: id<TAB>sent_at<TAB>deadline<TAB>pre_status_sig<TAB>pre_status_lines<TAB>escalated<TAB>summary; scanned by the watcher, pruned per-task by teardown
   .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
   .fleet-freeze      durable fleet-freeze flag; present = fm-spawn.sh, fm-send.sh, fm-watch.sh, fm-watch-arm.sh, and the supervise daemon refuse fleet movement (set by bin/fm-freeze.sh on, cleared by bin/fm-freeze.sh off; section 8)
-  .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
+  .watch.lock .wake-queue.lock .pending-acks.lock watcher singleton and queue serialization locks
   .hash-* .count-* .stale-* .stale-since-* .wedge-escalations-* .seen-* .hb-surfaced-* .last-* .heartbeat-streak   watcher internals; never touch
   .watch-triage.log  watcher's absorbed-wake debug log (size-capped); never relied on, safe to delete
   .last-watcher-beat watcher liveness beacon, touched every poll (including while absorbing benign wakes); guard scripts read it
@@ -523,6 +524,7 @@ Add the task to `data/backlog.md` under In flight.
 
 Covered by section 8.
 Steer a crewmate only with short single lines via `FM_HOME=<this-firstmate-home> bin/fm-send.sh` from an active firstmate session unless `FM_HOME` is already set to the active firstmate home; anything long belongs in a file the crewmate can read.
+Use `bin/fm-send.sh --expect-ack <minutes> fm-<id> ...` for captain dispatches or other must-not-drop steers; the target acknowledges by writing any status line, and the watcher escalates once through `ack-missed:` if the deadline passes.
 Steer a secondmate the same way.
 Its charter retargets escalation to the main firstmate's status file, so routine internal churn stays inside the secondmate home and only `done`, `blocked`, `needs-decision`, `failed`, or captain-relevant phase changes wake the main firstmate.
 Because `fm-send` to a `kind=secondmate` target marks the request as from-firstmate (section 7 intake), the secondmate's answer comes back on that status/doc path too, not in its chat; read the response there as an ordinary status signal and do not peek its chat for it.
@@ -646,6 +648,7 @@ The watcher reads that evidence with `bin/fm-crew-state.sh` (run-step first, the
 A `heartbeat` with no captain-relevant change is likewise absorbed.
 Absorbed wakes are advanced past their suppression marker and logged to `state/.watch-triage.log` while the watcher keeps blocking - no queue entry, no exit, no LLM turn.
 It exits with one reason line on an _actionable_ wake: a `signal` carrying a captain-relevant verb (`needs-decision:`/`blocked:`/`failed:`/`done:`/`PR ready`/`checks green`/`ready in branch`/`merged`); a no-verb `signal` whose crewmate is NOT provably working (it stopped its turn with no running pipeline and no busy pane, so it may be done, waiting on a decision, or wedged); any `check`; a `stale` whose crewmate is not provably working, whether or not its status log's last line is captain-relevant (surfaced at once, never left to wait out the timer); a provably-working `stale` that stays idle past the wedge threshold (`FM_STALE_ESCALATE_SECS`, default 240s); or the heartbeat fleet-scan's fail-safe backstop catching a captain-relevant status the per-wake path missed.
+It also exits on `ack-missed:` when a `fm-send --expect-ack` deadline passes without any target status write; these pending rows live in `state/.pending-acks` and are marked escalated after the first wake so they do not spam.
 Repeated provably-working stale escalations on the same unchanged pane are counted in `state/.wedge-escalations-*`; at `FM_WEDGE_DEMAND_INSPECT_COUNT` (default 3), the stale reason includes `demand-deep-inspection` so the wake is not mistaken for another routine validation wait.
 A captain-relevant status-log line does not by itself make a stale pane terminal: a crewmate gets no new status entry once firstmate hands it to a no-mistakes validation, so its last line can still read `done:` from BEFORE that validation started for the run's entire duration; a provably-working crew therefore always wins over that stale line and is absorbed (with the same wedge-escalation safety net), and only a crewmate that is NOT provably working has its status log trusted to decide terminal-vs-non-terminal.
 Only an actionable wake is written to the durable queue at `state/.wake-queue` - before advancing suppression markers such as `.seen-*`, `.stale-*`, `.last-check`, or `.last-heartbeat` - and only an actionable wake ends the background task, so you re-arm exactly once per actionable event instead of once per wake.
