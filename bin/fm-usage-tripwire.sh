@@ -107,7 +107,10 @@ tmp_files=${TMPDIR:-/tmp}/fm-usage-tripwire-files.$$
 cleanup() {
   rm -f "$tmp_files"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 : > "$tmp_files"
 
 collect_recent_files() {
