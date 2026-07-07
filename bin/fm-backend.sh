@@ -400,8 +400,11 @@ fm_backend_source() {  # <name>
   esac
 }
 
-# fm_backend_resolve_selector: resolve a raw fm-send.sh/fm-peek.sh style
-# selector to a live session-provider target. Three forms, in order:
+# fm_backend_resolve_selector: resolve a raw fm-peek.sh style selector to a
+# live session-provider target. fm-send.sh no longer calls this: it has its
+# own stricter fm_send_resolve_target that requires FM_HOME and refuses an
+# unresolved bare/ad hoc selector instead of falling back to a tmux window
+# search. Three forms, in order:
 #   target with ":"   used as-is (the escape hatch for a window/pane outside
 #                      this firstmate home) - backend-independent, a literal string.
 #   "fm-<id>"          routed through <state-dir>/<id>.meta's backend target
