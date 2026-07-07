@@ -31,7 +31,12 @@
 #   3. Reconcile the status log: if its last line says needs-decision/blocked but
 #      the run-step shows the run moved on, the log is deterministically stale and
 #      is flagged superseded. A genuinely parked run plus a needs-decision log
-#      agree, and are reported as parked.
+#      agree, and are reported as parked. The same applies to a "done: ... checks
+#      green" log line during an active (working) run: it is trusted only if it
+#      can plausibly belong to THIS run - it names the run's own id, the run
+#      already has a ci step, or a ci step status is resolvable. Otherwise it is a
+#      leftover from an earlier run (e.g. a rebase restarted validation) and is
+#      flagged superseded rather than short-circuiting a fresh early run to done.
 #   4. No run for this crew (pre-validation, or kind=scout): fall back to the
 #      recorded backend's pane busy state, then the status log's last line.
 #   5. Missing meta or torn-down worktree: report unknown · none. If no run is
