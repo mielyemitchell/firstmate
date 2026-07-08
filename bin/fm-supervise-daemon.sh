@@ -493,7 +493,7 @@ mark_escalated_seen() {  # <kind> <arg> <state>
 # busy-state (herdr) must NOT be pre-captured, since a conclusive "busy"
 # answer there should short-circuit without ever touching capture.
 pane_is_busy() {  # <target> [backend]
-  local target=$1 backend=${2:-tmux} bs tail40
+  local target=$1 backend=${2:-tmux} bs="" tail40=""
   if [ "$backend" = tmux ]; then
     tail40=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null) || return 1
     bs=$(fm_backend_busy_state "$backend" "$target" "$tail40" 2>/dev/null)
