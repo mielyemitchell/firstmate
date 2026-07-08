@@ -179,7 +179,17 @@ case "${1:-}" in
     for a in "$@"; do [ "$a" = "-p" ] && print=1; done
     [ "$print" = 1 ] && printf 'fakepane\n'
     exit 0 ;;
-  capture-pane) cat "$COMPOSER" 2>/dev/null; exit 0 ;;
+  capture-pane)
+    for a in "$@"; do
+      [ "$a" = "-e" ] && [ "${FM_FAKE_UNKNOWN_COMPOSER:-0}" = 1 ] && exit 1
+    done
+    if [ -n "${FM_FAKE_BUSY_TAIL:-}" ]; then
+      for a in "$@"; do
+        [ "$a" = "-40" ] && { cat "$FM_FAKE_BUSY_TAIL" 2>/dev/null; exit 0; }
+      done
+    fi
+    cat "$COMPOSER" 2>/dev/null
+    exit 0 ;;
   list-windows) exit 0 ;;
   send-keys)
     shift

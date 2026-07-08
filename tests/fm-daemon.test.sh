@@ -762,7 +762,7 @@ test_max_defer_afk_inactive_does_not_flush_or_alarm() {
 test_fm_send_exits_nonzero_on_confirmed_swallow() {
   # fm-send.sh must exit NON-ZERO when a steer's Enter is positively swallowed
   # (text left in the composer), so firstmate learns the instruction did not land
-  # — and exit ZERO on a clean submit.
+  # - and exit ZERO on a clean submit.
   local dir fakebin err
   dir=$(make_bordered_case send-swallow)
   fakebin="$dir/fakebin"; err="$dir/send.err"
@@ -780,6 +780,22 @@ test_fm_send_exits_nonzero_on_confirmed_swallow() {
   fi
   grep -F 'not submitted' "$err" >/dev/null || fail "fm-send did not explain the swallowed submit: $(cat "$err")"
   pass "fm-send exits non-zero on a confirmed swallow, zero on a clean submit"
+}
+
+test_fm_send_accepts_popup_risk_unknown_when_pane_is_busy() {
+  # Regression: claude `/` skill sends can land and immediately switch the pane
+  # busy before the composer row is readable. That is success, not an
+  # unverified popup swallow. A visible pending composer still fails above.
+  local dir fakebin err
+  dir=$(make_bordered_case send-popup-busy)
+  fakebin="$dir/fakebin"; err="$dir/send.err"
+  printf 'esc to interrupt\n' > "$dir/busy"
+  if ! PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$dir/state" FM_FAKE_COMPOSER="$dir/composer" \
+    FM_FAKE_BUSY_TAIL="$dir/busy" FM_FAKE_UNKNOWN_COMPOSER=1 FM_SEND_SLEEP=0.05 \
+    "$ROOT/bin/fm-send.sh" sess:win '/no-mistakes' >/dev/null 2>"$err"; then
+    fail "fm-send rejected a landed popup-risk send whose pane was already busy: $(cat "$err")"
+  fi
+  pass "fm-send treats popup-risk unknown as landed when the target is positively busy"
 }
 
 test_fm_send_exits_nonzero_on_initial_send_failure() {
@@ -1028,6 +1044,7 @@ test_normal_flush_clears_stale_wedge_marker
 test_below_max_defer_does_nothing
 test_max_defer_afk_inactive_does_not_flush_or_alarm
 test_fm_send_exits_nonzero_on_confirmed_swallow
+test_fm_send_accepts_popup_risk_unknown_when_pane_is_busy
 test_fm_send_exits_nonzero_on_initial_send_failure
 test_discover_supervisor_backend_precedence
 test_discover_supervisor_target_herdr

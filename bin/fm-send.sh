@@ -19,10 +19,10 @@
 # positively confirmed (the text is still sitting in the composer after all
 # retries), fm-send exits NON-ZERO so the caller knows the steer did not land
 # instead of silently leaving an unsubmitted instruction. An unreadable
-# ("unknown") pane is normally treated as sent, EXCEPT for popup-risk sends
-# (slash commands, and codex `$...` skill invocations), which hard-fail on
-# unknown too, since those completion popups make an unverified send more
-# likely to have actually landed on the wrong element.
+# ("unknown") pane is normally treated as sent. Popup-risk sends (slash
+# commands, and codex `$...` skill invocations) hard-fail on unknown only when
+# the backend cannot also show positive busy evidence, because a busy footer is
+# a reliable sign the agent consumed the message and started work.
 # Submission dispatches through the target's recorded backend; the tmux adapter
 # shares its composer/submit core with the away-mode daemon via bin/fm-tmux-lib.sh.
 # Tune with FM_SEND_RETRIES (default 3) / FM_SEND_SLEEP (0.4).
@@ -306,7 +306,8 @@ else
   # swallow (text still in the composer) is an error; an unreadable pane is
   # assumed sent. Popup-risk sends (require_verified_submit=1, set above for
   # slash commands and codex `$...` invocations) are the exception: those also
-  # fail on an unreadable ("unknown") verdict, since a plain-text send does not.
+  # fail on an unreadable ("unknown") verdict unless the target is already
+  # positively busy, which means the agent consumed the message.
   if ! verdict=$(fm_backend_send_text_submit "$TARGET_BACKEND" "$T" "$MARK_PREFIX$*" "$retries" "$sleep_s" "$settle" "$EXPECTED_LABEL"); then
     echo "error: text not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
     exit 1
@@ -322,8 +323,11 @@ else
       ;;
     unknown)
       if [ "$require_verified_submit" = 1 ]; then
-        echo "error: text submission to $T could not be verified (popup-risk send reported unknown; tried $RESOLUTION_TRIED)" >&2
-        exit 1
+        busy_state=$(fm_backend_busy_state "$TARGET_BACKEND" "$T")
+        if [ "$busy_state" != busy ]; then
+          echo "error: text submission to $T could not be verified (popup-risk send reported unknown; tried $RESOLUTION_TRIED)" >&2
+          exit 1
+        fi
       fi
       ;;
   esac

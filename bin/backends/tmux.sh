@@ -52,6 +52,14 @@ fm_backend_tmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> 
   fm_tmux_submit_core "$@"
 }
 
+fm_backend_tmux_busy_state() {  # <target>
+  if fm_pane_is_busy "$1"; then
+    printf 'busy'
+  else
+    printf 'unknown'
+  fi
+}
+
 # fm_backend_tmux_container_ensure: reuse the current tmux session when
 # firstmate itself runs inside tmux, else ensure a dedicated detached
 # "firstmate" session exists. Mirrors fm-spawn.sh's container-ensure block;

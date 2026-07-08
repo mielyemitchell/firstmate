@@ -440,8 +440,8 @@ test_dispatch_busy_state_unknown_for_zellij() {
   # shellcheck source=bin/fm-backend.sh
   . "$ROOT/bin/fm-backend.sh"
   [ "$(fm_backend_busy_state zellij 'firstmate:5')" = unknown ] \
-    || fail "fm_backend_busy_state should report unknown for zellij (no native agent-state primitive; D5: watcher falls back to regex, same as tmux)"
-  pass "fm_backend_busy_state: zellij (no native primitive) always reports unknown, same as tmux"
+    || fail "fm_backend_busy_state should report unknown for zellij (no native agent-state primitive; D5: watcher falls back to regex)"
+  pass "fm_backend_busy_state: zellij (no native primitive) always reports unknown"
 }
 
 # --- create_task: duplicate refusal, id parsing, focus-restore mitigation ----
