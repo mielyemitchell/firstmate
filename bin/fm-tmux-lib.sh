@@ -156,10 +156,13 @@ fm_pane_input_pending() {  # <target>
 }
 
 # fm_pane_is_busy: 0 if the pane's last few non-blank lines show a busy footer
-# (an agent mid-turn). Scans a 40-line tail like fm-watch.sh.
-fm_pane_is_busy() {  # <target>
-  local win=$1 tail40
-  tail40=$(tmux capture-pane -p -t "$win" -S -40 2>/dev/null) || return 1
+# (an agent mid-turn). Scans a 40-line tail like fm-watch.sh. Optional <tail40>
+# reuses an already-captured tail instead of issuing a fresh capture-pane call.
+fm_pane_is_busy() {  # <target> [tail40]
+  local win=$1 tail40=${2:-}
+  if [ -z "$tail40" ]; then
+    tail40=$(tmux capture-pane -p -t "$win" -S -40 2>/dev/null) || return 1
+  fi
   printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 \
     | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"
 }

@@ -762,7 +762,7 @@ test_max_defer_afk_inactive_does_not_flush_or_alarm() {
 test_fm_send_exits_nonzero_on_confirmed_swallow() {
   # fm-send.sh must exit NON-ZERO when a steer's Enter is positively swallowed
   # (text left in the composer), so firstmate learns the instruction did not land
-  # — and exit ZERO on a clean submit.
+  # - and exit ZERO on a clean submit.
   local dir fakebin err
   dir=$(make_bordered_case send-swallow)
   fakebin="$dir/fakebin"; err="$dir/send.err"
@@ -780,6 +780,42 @@ test_fm_send_exits_nonzero_on_confirmed_swallow() {
   fi
   grep -F 'not submitted' "$err" >/dev/null || fail "fm-send did not explain the swallowed submit: $(cat "$err")"
   pass "fm-send exits non-zero on a confirmed swallow, zero on a clean submit"
+}
+
+test_fm_send_accepts_popup_risk_unknown_on_idle_to_busy_transition() {
+  # Regression: claude `/` skill sends can land and immediately switch the pane
+  # busy before the composer row is readable. That is success, not an
+  # unverified popup swallow, but ONLY when the pane was idle right before this
+  # send - the busy reading must be caused by this send, not pre-existing.
+  local dir fakebin err
+  dir=$(make_bordered_case send-popup-busy)
+  fakebin="$dir/fakebin"; err="$dir/send.err"
+  printf 'esc to interrupt\n' > "$dir/busy"
+  if ! PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$dir/state" FM_FAKE_COMPOSER="$dir/composer" \
+    FM_FAKE_BUSY_TAIL="$dir/busy" FM_FAKE_BUSY_AFTER_MARKER="$dir/busy-after" FM_FAKE_UNKNOWN_COMPOSER=1 \
+    FM_SEND_SLEEP=0.05 "$ROOT/bin/fm-send.sh" sess:win '/no-mistakes' >/dev/null 2>"$err"; then
+    fail "fm-send rejected a landed popup-risk send that transitioned the pane idle-to-busy: $(cat "$err")"
+  fi
+  pass "fm-send treats popup-risk unknown as landed on an idle-to-busy transition"
+}
+
+test_fm_send_rejects_popup_risk_unknown_when_pane_was_already_busy() {
+  # A pane that was ALREADY busy before this send proves nothing about whether
+  # THIS message landed - it may have been busy from unrelated prior work while
+  # the composer read failed for an unrelated reason. Must still hard-fail.
+  local dir fakebin err
+  dir=$(make_bordered_case send-popup-already-busy)
+  fakebin="$dir/fakebin"; err="$dir/send.err"
+  printf 'esc to interrupt\n' > "$dir/busy"
+  touch "$dir/busy-after"
+  if PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$dir/state" FM_FAKE_COMPOSER="$dir/composer" \
+    FM_FAKE_BUSY_TAIL="$dir/busy" FM_FAKE_BUSY_AFTER_MARKER="$dir/busy-after" FM_FAKE_UNKNOWN_COMPOSER=1 \
+    FM_SEND_SLEEP=0.05 "$ROOT/bin/fm-send.sh" sess:win '/no-mistakes' >/dev/null 2>"$err"; then
+    fail "fm-send accepted a popup-risk unknown verdict when the pane was already busy beforehand"
+  fi
+  grep -F 'could not be verified' "$err" >/dev/null \
+    || fail "fm-send did not explain the already-busy rejection: $(cat "$err")"
+  pass "fm-send rejects popup-risk unknown when the pane was already busy before the send"
 }
 
 test_fm_send_exits_nonzero_on_initial_send_failure() {
@@ -1028,6 +1064,8 @@ test_normal_flush_clears_stale_wedge_marker
 test_below_max_defer_does_nothing
 test_max_defer_afk_inactive_does_not_flush_or_alarm
 test_fm_send_exits_nonzero_on_confirmed_swallow
+test_fm_send_accepts_popup_risk_unknown_on_idle_to_busy_transition
+test_fm_send_rejects_popup_risk_unknown_when_pane_was_already_busy
 test_fm_send_exits_nonzero_on_initial_send_failure
 test_discover_supervisor_backend_precedence
 test_discover_supervisor_target_herdr

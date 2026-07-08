@@ -179,7 +179,22 @@ case "${1:-}" in
     for a in "$@"; do [ "$a" = "-p" ] && print=1; done
     [ "$print" = 1 ] && printf 'fakepane\n'
     exit 0 ;;
-  capture-pane) cat "$COMPOSER" 2>/dev/null; exit 0 ;;
+  capture-pane)
+    for a in "$@"; do
+      [ "$a" = "-e" ] && [ "${FM_FAKE_UNKNOWN_COMPOSER:-0}" = 1 ] && exit 1
+    done
+    if [ -n "${FM_FAKE_BUSY_TAIL:-}" ]; then
+      for a in "$@"; do
+        [ "$a" = "-40" ] || continue
+        if [ -n "${FM_FAKE_BUSY_AFTER_MARKER:-}" ] && [ ! -f "$FM_FAKE_BUSY_AFTER_MARKER" ]; then
+          break
+        fi
+        cat "$FM_FAKE_BUSY_TAIL" 2>/dev/null
+        exit 0
+      done
+    fi
+    cat "$COMPOSER" 2>/dev/null
+    exit 0 ;;
   list-windows) exit 0 ;;
   send-keys)
     shift
@@ -204,6 +219,7 @@ case "${1:-}" in
       [ "${FM_FAKE_SEND_FAIL:-0}" = 1 ] && exit 1
       [ -n "${FM_FAKE_SENT:-}" ] && printf '%s\n' "$text" >> "$FM_FAKE_SENT"
       printf '│ > %s │\n' "$text" > "$COMPOSER"
+      [ -n "${FM_FAKE_BUSY_AFTER_MARKER:-}" ] && touch "$FM_FAKE_BUSY_AFTER_MARKER"
     fi
     exit 0 ;;
 esac

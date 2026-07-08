@@ -57,10 +57,9 @@ fm_fleet_freeze_refuse "watch" || exit 1
 # The DEFAULT EVENT SOURCE: this watcher's poll loop over the pull primitives
 # (capture, recorded windows, backend busy-state, and the BUSY_REGEX fallback)
 # synthesizes the signal/stale/check/heartbeat wake vocabulary for backends with
-# no native event push. tmux always reports unknown busy-state, preserving the
-# original regex path. herdr contributes native semantic busy-state through the
+# no native event push. Backends can contribute positive busy-state through the
 # same poll loop until a future push subscription replaces this default source;
-# see bin/fm-backend.sh and docs/herdr-backend.md.
+# see bin/fm-backend.sh and the backend docs.
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-ack-lib.sh
@@ -173,16 +172,15 @@ hash_pane() {
 }
 
 # window_is_busy: 0 (busy) iff the task's harness is actively working. Prefers
-# a backend's native semantic busy state (fm_backend_busy_state - herdr's
-# agent.get; herdr-addendum "busy state" row, "the first backend where
-# fm_session_busy_state gets real semantics"); falls back to the existing
-# pane-tail regex ONLY when the backend reports unknown (tmux always does, so
-# its path is unchanged byte-for-byte). <tail40> is the same bounded capture
-# already read for hashing, so this adds no extra backend calls on the
-# regex-fallback path.
+# a backend's positive busy state (for example herdr agent.get or tmux's busy
+# footer detector); falls back to the existing pane-tail regex only when the
+# backend reports unknown. <tail40> is the same bounded capture already read
+# for hashing and is threaded into fm_backend_busy_state so tmux's busy-footer
+# detector reuses it instead of issuing its own capture-pane call, so this adds
+# no extra backend calls on either path.
 window_is_busy() {  # <window> <tail40>
   local w=$1 tail40=$2 bs
-  bs=$(fm_backend_busy_state "$(window_backend "$w")" "$w" 2>/dev/null)
+  bs=$(fm_backend_busy_state "$(window_backend "$w")" "$w" "$tail40" 2>/dev/null)
   case "$bs" in
     busy) return 0 ;;
     idle) return 1 ;;

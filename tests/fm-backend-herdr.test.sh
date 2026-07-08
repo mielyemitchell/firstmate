@@ -976,12 +976,14 @@ test_dispatch_routes_herdr_backend() {
   pass "fm_backend_validate: herdr is a known backend (P2)"
 }
 
-test_dispatch_busy_state_unknown_for_tmux() {
+test_dispatch_busy_state_routes_tmux_busy_footer() {
   # shellcheck source=bin/fm-backend.sh
   . "$ROOT/bin/fm-backend.sh"
-  [ "$(fm_backend_busy_state tmux 'sess:win')" = unknown ] \
-    || fail "fm_backend_busy_state should report unknown for tmux (no native agent-state primitive; watcher falls back to regex)"
-  pass "fm_backend_busy_state: tmux (no native primitive) always reports unknown, preserving the P1 regex-only path"
+  _FM_BACKEND_TMUX_SOURCED=1
+  fm_backend_tmux_busy_state() { [ "$1" = "sess:win" ] || fail "tmux busy_state got wrong target: $1"; printf 'busy'; }
+  [ "$(fm_backend_busy_state tmux 'sess:win')" = busy ] \
+    || fail "fm_backend_busy_state should dispatch to tmux's busy footer detector"
+  pass "fm_backend_busy_state: tmux dispatches to its positive busy-footer detector"
 }
 
 test_dispatch_composer_state_routes_by_backend() {
@@ -1329,6 +1331,6 @@ test_send_text_submit_popup_autocomplete_requires_second_enter
 test_send_text_submit_send_failed
 test_send_text_submit_unknown_on_capture_failure
 test_dispatch_routes_herdr_backend
-test_dispatch_busy_state_unknown_for_tmux
+test_dispatch_busy_state_routes_tmux_busy_footer
 test_dispatch_composer_state_routes_by_backend
 test_scripts_route_explicit_target_through_meta_backend
