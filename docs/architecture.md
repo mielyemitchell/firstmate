@@ -80,6 +80,18 @@ Only a named non-default branch checked out in `FM_ROOT` is a worktree tangle.
 If another live session holds the fleet lock, both surfaces keep the alarm but switch to read-only wording with no repair command.
 Ship briefs also tell the crewmate to verify `pwd -P` and `git rev-parse --show-toplevel` before creating `fm/<id>`, then stop with a blocked status if it landed in the primary checkout.
 
+## FM_HOME ownership guard
+
+A second, narrower guard (`bin/fm-home-guard-lib.sh`) protects secondmate homes from cross-home mutation.
+It fires only when the caller's own checkout is itself a seeded secondmate home (carrying `.fm-secondmate-home`, `AGENTS.md`, and `bin/`) but the effective `FM_HOME` resolves to a different real path - the shape of a secondmate agent whose `FM_HOME` got pointed at another home by mistake.
+Every mutating entrypoint sources it and calls `fm_home_guard mutate "<script>"` before doing anything else: `fm-lock.sh`, `fm-send.sh`, `fm-spawn.sh`, `fm-watch.sh`, `fm-watch-arm.sh`, `fm-wake-drain.sh`, `fm-supervise-daemon.sh`, and `fm-tasks-axi.sh` (the last also calls `fm_home_guard read` for its read-only verbs).
+A mutating call refuses with a remediation line and exits non-zero before touching anything; a read-only call only warns.
+`fm-wake-lib.sh` deliberately does not call the guard itself, since it is sourced by read-only callers and hooks that must never be blocked mid-source - each mutating entrypoint that sources it calls the guard on its own instead.
+Primary homes are unaffected, since they carry no durable per-home ownership marker yet.
+
+`bin/fm-tasks-axi.sh` also closes a related cwd trap: `tasks-axi` discovers `.tasks.toml` from the caller's working directory, so a bare `tasks-axi` invocation run from the repo root can silently mutate the wrong home's backlog when `FM_HOME` points elsewhere.
+The wrapper resolves the effective `FM_HOME`, `cd`s into it before running `tasks-axi`, and refuses when the configured markdown path resolves outside that home; `fm-tasks-axi-lib.sh` also gives bootstrap a `TASKS_AXI: repo-root data/backlog.md differs from FM_HOME backlog` warning when the two homes' backlog files have already diverged.
+
 ## Fleet freeze, stale-state reconciliation, and the usage tripwire
 
 `bin/fm-freeze.sh on [reason...]` writes local `state/.fleet-freeze`; while it exists, `fm-spawn.sh`, `fm-send.sh`, `fm-watch.sh`, `fm-watch-arm.sh`, and the away-mode daemon's injection path all refuse through the shared `fm-freeze-lib.sh` guard before doing anything else, so the fleet is parked without tearing anything down.

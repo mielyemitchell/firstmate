@@ -180,6 +180,8 @@ Otherwise it prints one line per problem or capability fact; handle each:
   It prints only when `config/backlog-backend` is absent or set to `tasks-axi` and the compatibility probe accepts `tasks-axi --version` as 0.1.1 or newer.
   If the backend is not opted out and `tasks-axi` is missing or incompatible, bootstrap reports `MISSING: tasks-axi (install: npm install -g tasks-axi)` but still falls back to hand-editing and never blocks work.
   If `config/backlog-backend=manual`, bootstrap hand-edits and does not suggest installing `tasks-axi`.
+- `TASKS_AXI: repo-root data/backlog.md differs from FM_HOME backlog - use bin/fm-tasks-axi.sh so tasks-axi runs from <home>` - `FM_HOME` points somewhere other than this repo root and the two `data/backlog.md` files have diverged; bare `tasks-axi` discovers `.tasks.toml` from the working directory, so running it from the repo root can silently mutate the wrong home's backlog.
+  Always invoke `bin/fm-tasks-axi.sh` (section 10) instead of bare `tasks-axi`; it resolves and `cd`s into the effective `FM_HOME` before running.
 - `NUDGE_SECONDMATES: <window-targets...>` - the secondmate sweep fast-forwarded one or more _running_ secondmate homes to firstmate's current version and their instruction surface (`AGENTS.md`, `bin/`, or `.agents/skills/`) actually changed; send a one-line re-read nudge with `FM_HOME=<this-firstmate-home> bin/fm-send.sh <window-target> 'firstmate was updated to the latest - please re-read your AGENTS.md to pick up the new instructions.'` unless `FM_HOME` is already set to the active firstmate home.
   This mirrors `/updatefirstmate`'s `nudge-secondmates:` report: it is a gentle steer, never an interruption, and the fast-forward already landed safely.
   A secondmate that was skipped, already current, or whose advance changed no instructions is not listed and must not be disturbed.
@@ -386,14 +388,14 @@ Do not eagerly backfill every project.
 
 Route each piece of durable knowledge to its most specific home:
 
-| Kind of knowledge                               | Home                                                                                                |
-| ----------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Captain preferences and working style           | `data/captain.md`                                                                                   |
-| Project-intrinsic knowledge                     | that project's own `AGENTS.md`, via normal crewmate delivery, never hand-written by firstmate       |
-| Fleet-local operational facts and gotchas       | `data/learnings.md`                                                                                 |
-| Knowledge generalizable to every firstmate user | the shared `AGENTS.md`, shipped via PR through the pipeline                                         |
+| Kind of knowledge                               | Home                                                                                                          |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Captain preferences and working style           | `data/captain.md`                                                                                             |
+| Project-intrinsic knowledge                     | that project's own `AGENTS.md`, via normal crewmate delivery, never hand-written by firstmate                 |
+| Fleet-local operational facts and gotchas       | `data/learnings.md`                                                                                           |
+| Knowledge generalizable to every firstmate user | the shared `AGENTS.md`, shipped via PR through the pipeline                                                   |
 | Task-scoped notes                               | backlog item notes (`bin/fm-tasks-axi.sh update <id> --append "<note>"`, or hand-edit per the active backend) |
-| Investigation findings                          | scout reports at `data/<id>/report.md`                                                              |
+| Investigation findings                          | scout reports at `data/<id>/report.md`                                                                        |
 
 When the captain invokes `/stow`, load the `stow` skill.
 It sweeps the current session for uncaptured durable knowledge, routes findings with this table, files undone next steps to the backlog, and reports whether the session is safe to reset.

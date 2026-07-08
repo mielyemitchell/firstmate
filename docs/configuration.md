@@ -9,12 +9,17 @@ The shared orchestrator behavior lives in [`AGENTS.md`](../AGENTS.md) - edit it 
 ## Backlog backend (.tasks.toml / config/backlog-backend)
 
 The tracked `.tasks.toml` pins the default `tasks-axi` markdown backend to `data/backlog.md`, with `done_keep = 10` and an archive at `data/done-archive.md`.
-When the default backend is selected and compatible `tasks-axi` is on `PATH`, firstmate uses its verbs for routine backlog mutations and keeps secondmate transfers behind `fm-backlog-handoff.sh` validation.
+When the default backend is selected and compatible `tasks-axi` is on `PATH`, firstmate uses `bin/fm-tasks-axi.sh` for routine backlog mutations and keeps secondmate transfers behind `fm-backlog-handoff.sh` validation.
 Compatible means the shared bootstrap probe accepts `tasks-axi --version` as 0.1.1 or newer.
 If the default backend is selected but `tasks-axi` is missing or incompatible, bootstrap suggests `npm install -g tasks-axi` through the normal consent flow and falls back to manual editing until it is installed.
 Set the local, gitignored `config/backlog-backend` file to `manual` to force manual backlog editing and suppress the install suggestion.
 Absent or `tasks-axi` selects the default tasks-axi backend.
 The file format is unchanged in both modes; tasks-axi and manual edits produce the same `## In flight`, `## Queued`, and `## Done` sections.
+
+`tasks-axi` discovers `.tasks.toml` from the caller's working directory, so a bare `tasks-axi` invocation run from the repo root can silently mutate the wrong home's backlog when `FM_HOME` points elsewhere.
+`bin/fm-tasks-axi.sh` closes this cwd trap: it resolves the effective `FM_HOME`, `cd`s into it before running `tasks-axi`, and refuses when the configured markdown path resolves outside that home.
+Bootstrap also detects existing drift and reports it as `TASKS_AXI: repo-root data/backlog.md differs from FM_HOME backlog - use bin/fm-tasks-axi.sh so tasks-axi runs from <home>` when the repo root and `FM_HOME` have diverged `data/backlog.md` files.
+Always invoke `bin/fm-tasks-axi.sh <verb> ...` rather than bare `tasks-axi`.
 
 ## Runtime backend (config/backend / FM_BACKEND)
 
@@ -122,6 +127,14 @@ The full zellij home label also includes a short hash of the resolved `FM_ROOT` 
 For the cmux backend, `FM_CONFIG_OVERRIDE` overrides where `config/cmux-socket-password` is read from, while `FM_HOME` determines the default config path and readable home prefix embedded in workspace titles.
 The full cmux home label also includes a short hash of the resolved `FM_ROOT` path, and there is no per-home container split.
 
+### FM_HOME ownership guard
+
+`bin/fm-home-guard-lib.sh` is a shared guard sourced by every mutating entrypoint (`fm-lock.sh`, `fm-send.sh`, `fm-spawn.sh`, `fm-watch.sh`, `fm-watch-arm.sh`, `fm-wake-drain.sh`, `fm-supervise-daemon.sh`, and `fm-tasks-axi.sh`).
+It fires only when the caller's git worktree is itself a seeded secondmate home (it carries a `.fm-secondmate-home` marker plus `AGENTS.md` and `bin/`) and the effective `FM_HOME` resolves to a different real path.
+That is the "secondmate context" case: a secondmate's own crewmate or agent, running from inside that secondmate's checkout, whose `FM_HOME` has been pointed at some other home by mistake.
+A read-only call (`fm_home_guard read`) warns to stderr and continues; a mutating call (`fm_home_guard mutate`) refuses with a one-line remediation (set `FM_HOME` to the secondmate's own home, or run the command from the home that owns the target `FM_HOME`) and a non-zero exit.
+Primary homes and a secondmate operating on its own `FM_HOME` are unaffected; there is no durable ownership marker for primary homes yet.
+
 ## Harness support
 
 claude, codex, opencode, pi, and grok are all empirically verified; new harnesses get verified through a supervised trial task before joining the set.
@@ -165,9 +178,10 @@ When bootstrap resolves `backend=orca` from `FM_BACKEND` or `config/backend`, it
 When `config/crew-dispatch.json` exists, bootstrap also requires `jq` for dispatch profile validation.
 When X mode is opted in, bootstrap also requires `curl` and `jq` before arming the relay poll shim.
 Unless `config/backlog-backend=manual`, bootstrap treats `tasks-axi` as the default backlog backend.
-If compatible `tasks-axi` is already on `PATH`, bootstrap records it as `TASKS_AXI: available` and firstmate uses its verbs for routine backlog mutations.
+If compatible `tasks-axi` is already on `PATH`, bootstrap records it as `TASKS_AXI: available` and firstmate uses `bin/fm-tasks-axi.sh` for routine backlog mutations.
 When it is absent or incompatible, bootstrap reports `MISSING: tasks-axi (install: npm install -g tasks-axi)` and firstmate keeps hand-editing `data/backlog.md` until installation is approved and completed.
 When `config/backlog-backend=manual`, bootstrap hand-edits and does not suggest installing `tasks-axi`.
+Unless opted out, bootstrap also warns with `TASKS_AXI: repo-root data/backlog.md differs from FM_HOME backlog - use bin/fm-tasks-axi.sh so tasks-axi runs from <home>` when the repo root and `FM_HOME` point at different, already-diverged `data/backlog.md` files.
 Bootstrap also reports a `TANGLE:` line when `FM_ROOT` is on a named non-default branch; follow the printed checkout remediation rather than treating it as an installable tool problem.
 In a read-only session that did not get the fleet lock, the same line is advisory and omits the checkout command.
 The locked session-start bootstrap step also runs a best-effort project clone refresh through `fm-fleet-sync.sh`.
