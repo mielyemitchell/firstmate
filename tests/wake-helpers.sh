@@ -185,7 +185,12 @@ case "${1:-}" in
     done
     if [ -n "${FM_FAKE_BUSY_TAIL:-}" ]; then
       for a in "$@"; do
-        [ "$a" = "-40" ] && { cat "$FM_FAKE_BUSY_TAIL" 2>/dev/null; exit 0; }
+        [ "$a" = "-40" ] || continue
+        if [ -n "${FM_FAKE_BUSY_AFTER_MARKER:-}" ] && [ ! -f "$FM_FAKE_BUSY_AFTER_MARKER" ]; then
+          break
+        fi
+        cat "$FM_FAKE_BUSY_TAIL" 2>/dev/null
+        exit 0
       done
     fi
     cat "$COMPOSER" 2>/dev/null
@@ -214,6 +219,7 @@ case "${1:-}" in
       [ "${FM_FAKE_SEND_FAIL:-0}" = 1 ] && exit 1
       [ -n "${FM_FAKE_SENT:-}" ] && printf '%s\n' "$text" >> "$FM_FAKE_SENT"
       printf '│ > %s │\n' "$text" > "$COMPOSER"
+      [ -n "${FM_FAKE_BUSY_AFTER_MARKER:-}" ] && touch "$FM_FAKE_BUSY_AFTER_MARKER"
     fi
     exit 0 ;;
 esac

@@ -175,10 +175,12 @@ hash_pane() {
 # a backend's positive busy state (for example herdr agent.get or tmux's busy
 # footer detector); falls back to the existing pane-tail regex only when the
 # backend reports unknown. <tail40> is the same bounded capture already read
-# for hashing, so this adds no extra backend calls on the regex-fallback path.
+# for hashing and is threaded into fm_backend_busy_state so tmux's busy-footer
+# detector reuses it instead of issuing its own capture-pane call, so this adds
+# no extra backend calls on either path.
 window_is_busy() {  # <window> <tail40>
   local w=$1 tail40=$2 bs
-  bs=$(fm_backend_busy_state "$(window_backend "$w")" "$w" 2>/dev/null)
+  bs=$(fm_backend_busy_state "$(window_backend "$w")" "$w" "$tail40" 2>/dev/null)
   case "$bs" in
     busy) return 0 ;;
     idle) return 1 ;;

@@ -52,8 +52,8 @@ fm_backend_tmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> 
   fm_tmux_submit_core "$@"
 }
 
-fm_backend_tmux_busy_state() {  # <target>
-  if fm_pane_is_busy "$1"; then
+fm_backend_tmux_busy_state() {  # <target> [tail40]
+  if fm_pane_is_busy "$1" "${2:-}"; then
     printf 'busy'
   else
     printf 'unknown'

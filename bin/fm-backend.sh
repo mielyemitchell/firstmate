@@ -541,9 +541,12 @@ fm_backend_worktree_path() {  # <backend> <worktree-id>
 
 # fm_backend_busy_state: semantic busy/idle/unknown when a backend exposes
 # positive busy evidence. Herdr uses native agent-state; tmux uses its existing
-# verified busy-footer detector. Callers own the fallback policy: unknown is the
-# cue for broader pane-hash / regex corroboration where needed.
-fm_backend_busy_state() {  # <backend> <target>
+# verified busy-footer detector, and accepts an optional pre-captured <tail40>
+# (forwarded verbatim through "$@") so a caller that already read the pane's
+# tail this poll cycle does not trigger a second capture-pane call. Callers own
+# the fallback policy: unknown is the cue for broader pane-hash / regex
+# corroboration where needed.
+fm_backend_busy_state() {  # <backend> <target> [tail40]
   local backend=$1
   shift
   fm_backend_source "$backend" || { printf 'unknown'; return 0; }
