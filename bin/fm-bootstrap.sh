@@ -474,6 +474,7 @@ crew=
 [ -n "$crew" ] && [ "$crew" != "default" ] && echo "CREW_HARNESS_OVERRIDE: $crew"
 crew_dispatch_validate
 if ! fm_backlog_backend_manual "$CONFIG"; then
+  fm_tasks_axi_cwd_trap_warning "$FM_ROOT" "$FM_HOME"
   if fm_tasks_axi_compatible; then
     echo "TASKS_AXI: available"
   else

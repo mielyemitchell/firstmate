@@ -12,6 +12,13 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 LOCK="$STATE/.lock"
+# shellcheck source=bin/fm-home-guard-lib.sh
+. "$SCRIPT_DIR/fm-home-guard-lib.sh"
+if [ "${1:-}" = "status" ]; then
+  fm_home_guard read "fm-lock.sh status" || exit 1
+else
+  fm_home_guard mutate "fm-lock.sh" || exit 1
+fi
 mkdir -p "$STATE"
 
 # Known harness command names; extend when a new adapter is verified.

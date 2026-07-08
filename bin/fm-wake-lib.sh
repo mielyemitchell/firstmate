@@ -9,6 +9,9 @@ STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
 FM_WAKE_QUEUE="${FM_WAKE_QUEUE:-$STATE/.wake-queue}"
 FM_WAKE_QUEUE_LOCK="${FM_WAKE_QUEUE_LOCK:-$STATE/.wake-queue.lock}"
 FM_LOCK_STALE_AFTER="${FM_LOCK_STALE_AFTER:-2}"
+# shellcheck source=bin/fm-home-guard-lib.sh
+. "$FM_WAKE_LIB_DIR/fm-home-guard-lib.sh"
+fm_home_guard mutate "fm wake queue" || return 1
 mkdir -p "$STATE"
 
 fm_current_pid() {

@@ -53,3 +53,16 @@ fm_tasks_axi_backend_available() {
   fm_backlog_backend_manual "$config_dir" && return 1
   fm_tasks_axi_compatible
 }
+
+fm_tasks_axi_cwd_trap_warning() {
+  local root=$1 home=$2 root_real home_real root_backlog home_backlog
+  root_real=$(cd "$root" 2>/dev/null && pwd -P) || return 0
+  home_real=$(cd "$home" 2>/dev/null && pwd -P) || return 0
+  [ "$root_real" != "$home_real" ] || return 0
+  root_backlog="$root_real/data/backlog.md"
+  home_backlog="$home_real/data/backlog.md"
+  [ -f "$root_backlog" ] || return 0
+  [ -f "$home_backlog" ] || return 0
+  cmp -s "$root_backlog" "$home_backlog" && return 0
+  printf 'TASKS_AXI: repo-root data/backlog.md differs from FM_HOME backlog - use bin/fm-tasks-axi.sh so tasks-axi runs from %s\n' "$home_real"
+}
