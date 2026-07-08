@@ -55,6 +55,7 @@ make_fake_root() {
   # fm-wake-lib.sh: symlink the REAL file (teardown sources it for fm_path_mtime,
   # used by the stale worktree git-lock cleanup; unchanged by this fixture).
   ln -s "$ROOT/bin/fm-wake-lib.sh" "$fake/bin/fm-wake-lib.sh"
+  ln -s "$ROOT/bin/fm-home-guard-lib.sh" "$fake/bin/fm-home-guard-lib.sh"
   # fm-ack-lib.sh: symlink the REAL file (teardown sources it to prune pending
   # acks on teardown; unchanged by this fixture).
   ln -s "$ROOT/bin/fm-ack-lib.sh" "$fake/bin/fm-ack-lib.sh"
@@ -74,6 +75,7 @@ SH
   # backlog_refresh_reminder takes the plain-message path; no tasks-axi here.
   cat > "$fake/bin/fm-tasks-axi-lib.sh" <<'SH'
 fm_tasks_axi_compatible() { return 1; }
+fm_tasks_axi_backend_available() { return 1; }
 SH
   # Meta with a nonexistent worktree so the dirty/treehouse blocks skip.
   cat > "$fake/state/$id.meta" <<META
@@ -153,6 +155,7 @@ test_teardown_skips_gracefully_without_tasktmp() {
   ln -s "$ROOT/bin/backends/tmux.sh" "$fake/bin/backends/tmux.sh"
   ln -s "$ROOT/bin/fm-tmux-lib.sh" "$fake/bin/fm-tmux-lib.sh"
   ln -s "$ROOT/bin/fm-wake-lib.sh" "$fake/bin/fm-wake-lib.sh"
+  ln -s "$ROOT/bin/fm-home-guard-lib.sh" "$fake/bin/fm-home-guard-lib.sh"
   ln -s "$ROOT/bin/fm-ack-lib.sh" "$fake/bin/fm-ack-lib.sh"
   cat > "$fake/bin/fm-guard.sh" <<'SH'
 #!/usr/bin/env bash
@@ -166,6 +169,7 @@ SH
   chmod +x "$fake/bin/fm-fleet-sync.sh"
   cat > "$fake/bin/fm-tasks-axi-lib.sh" <<'SH'
 fm_tasks_axi_compatible() { return 1; }
+fm_tasks_axi_backend_available() { return 1; }
 SH
   # No tasktmp= line at all.
   cat > "$fake/state/$id.meta" <<META

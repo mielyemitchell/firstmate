@@ -38,6 +38,9 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-home-guard-lib.sh
+. "$SCRIPT_DIR/fm-home-guard-lib.sh"
+fm_home_guard mutate "fm-watch-arm.sh" || exit 1
 # shellcheck source=bin/fm-freeze-lib.sh
 . "$SCRIPT_DIR/fm-freeze-lib.sh"
 

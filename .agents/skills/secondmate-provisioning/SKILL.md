@@ -81,6 +81,9 @@ Secondmate project lists may include `no-mistakes` and `direct-PR` projects only
 `local-only` projects stay with the main firstmate.
 For `no-mistakes` projects, seeding initializes only projects newly cloned into a secondmate home and refuses to mutate a preexisting clone that is not already initialized.
 
+A shared guard (`bin/fm-home-guard-lib.sh`) protects a live secondmate from accidentally mutating a foreign `FM_HOME`.
+It fires only when the caller is running from inside a seeded secondmate home's own checkout but the effective `FM_HOME` resolves elsewhere: every mutating entrypoint (`fm-lock.sh`, `fm-send.sh`, `fm-spawn.sh`, `fm-watch.sh`, `fm-watch-arm.sh`, `fm-wake-drain.sh`, `fm-supervise-daemon.sh`, `fm-tasks-axi.sh`) refuses with a remediation line instead of mutating; a secondmate operating on its own `FM_HOME` is unaffected.
+
 ## Backlog handoff
 
 When a secondmate is created for a domain, existing main-backlog items that fall under its scope should become its work instead of staying stranded in the main backlog.

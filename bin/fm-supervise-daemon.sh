@@ -859,6 +859,9 @@ fm_super_main() {
   # Export FM_STATE_OVERRIDE so the lib resolves the same state dir.
   # shellcheck source=bin/fm-wake-lib.sh
   FM_STATE_OVERRIDE="$STATE" . "$FM_DAEMON_DIR/fm-wake-lib.sh"
+  # shellcheck source=bin/fm-home-guard-lib.sh
+  . "$FM_DAEMON_DIR/fm-home-guard-lib.sh"
+  fm_home_guard mutate "fm-supervise-daemon.sh" || exit 1
 
   local WATCH="$FM_DAEMON_DIR/fm-watch.sh"
   local LOG="$STATE/.supervise-daemon.log"

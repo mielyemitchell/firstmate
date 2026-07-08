@@ -61,6 +61,9 @@ if [ ! -d "$STATE" ]; then
   exit 1
 fi
 
+# shellcheck source=bin/fm-home-guard-lib.sh
+. "$SCRIPT_DIR/fm-home-guard-lib.sh"
+fm_home_guard mutate "fm-send.sh" || exit 1
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-marker-lib.sh

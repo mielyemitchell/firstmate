@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 # Shared durable wake queue and portable lock helpers.
+#
+# This is a sourced-everywhere shared library, including by read-only callers
+# and hooks (bin/fm-guard.sh, bin/fm-turnend-guard.sh) that must never be
+# blocked mid-source. It intentionally does NOT call fm_home_guard itself: an
+# unconditional guard call here would return non-zero before the functions
+# below are defined, truncating the library for every caller including ones
+# that never mutate anything. FM_HOME ownership protection instead belongs to
+# each mutating entrypoint script, exactly like bin/fm-watch.sh, bin/fm-lock.sh,
+# bin/fm-send.sh, and bin/fm-spawn.sh already do: source
+# bin/fm-home-guard-lib.sh and call fm_home_guard mutate "<script>" before
+# doing any mutating work.
 
 FM_WAKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_WAKE_DEFAULT_ROOT="$(cd "$FM_WAKE_LIB_DIR/.." && pwd)"
