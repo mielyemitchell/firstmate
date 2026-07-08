@@ -601,7 +601,13 @@ run_send_case() {  # <bin-root> <fakebin> <log> <home> -- <send args...>
 }
 
 strip_send_preflight() {  # <log>
-  grep -v $'\x1f''display-message'$'\x1f''-p'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''#{pane_id}' "$1"
+  # Also strips the pre-send busy-state snapshot capture-pane call that
+  # popup-risk sends (slash commands, codex `$...` invocations) now issue
+  # before submitting, so an idle-to-busy transition can later be checked
+  # (bin/fm-send.sh's pre_busy_state) - a legitimate new-behavior addition
+  # the pre-refactor baseline never made, not a conformance regression.
+  grep -v $'\x1f''display-message'$'\x1f''-p'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''#{pane_id}' "$1" \
+    | grep -v $'\x1f''capture-pane'$'\x1f''-p'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''-S'$'\x1f''-40'
 }
 
 test_send_conformance_old_vs_new() {
@@ -648,6 +654,8 @@ test_send_conformance_old_vs_new() {
   run_send_case "$ROOT" "$fb" "$log_new" "$home" -- "sess:win" /some-skill
   rc_new=$?
   expect_code "$rc_old" "$rc_new" "fm-send /skill: old vs new exit code"
+  assert_contains "$(cat "$log_new")" $'\x1f''capture-pane'$'\x1f''-p'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''-S'$'\x1f''-40' \
+    "fm-send did not snapshot busy-state before a popup-risk send"
   strip_send_preflight "$log_old" > "$filtered_old"
   strip_send_preflight "$log_new" > "$filtered_new"
   diff -u "$filtered_old" "$filtered_new" > "$TMP_ROOT/send-diff-slash.txt" 2>&1 \
