@@ -79,7 +79,7 @@ set -u
   printf '\n'
 } >> "$FM_HERDR_LOG"
 if [ "${1:-}" = status ] && [ "${2:-}" = --json ]; then
-  printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n'
+  printf '{"client":{"version":"0.7.2","protocol":16},"server":{"running":true}}\n'
 fi
 exit 0
 SH

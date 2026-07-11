@@ -108,7 +108,7 @@ fm_backend_herdr_tool_check() {
 }
 
 # fm_backend_herdr_version_check: refuse loudly on a missing/incompatible
-# herdr client. Verified locally: v0.7.1, protocol 14 (herdr status --json's
+# herdr client. Verified locally: v0.7.2, protocol 16 (herdr status --json's
 # .client.protocol; client info is session-independent, unlike .server).
 fm_backend_herdr_version_check() {
   fm_backend_herdr_tool_check || return 1
