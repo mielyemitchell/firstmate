@@ -96,7 +96,7 @@ set -u
 case "${1:-}" in
   status)
     [ "${2:-}" = --json ] && {
-      printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n'
+      printf '{"client":{"version":"0.7.2","protocol":16},"server":{"running":true}}\n'
       exit 0
     } ;;
   server)
