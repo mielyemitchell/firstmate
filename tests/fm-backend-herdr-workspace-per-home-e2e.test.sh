@@ -32,6 +32,10 @@ set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# shellcheck source=tests/real-herdr-smoke-retry.sh
+. "$ROOT/tests/real-herdr-smoke-retry.sh"
+fm_real_herdr_smoke_retry_on_treehouse_contention "$@"
+
 fail() { printf 'not ok - %s\n' "$1" >&2; cleanup_all; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 assert_contains_local() {  # <haystack> <needle> <msg>
