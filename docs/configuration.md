@@ -24,6 +24,7 @@ The file format is unchanged in both modes; tasks-axi and manual edits produce t
 `tasks-axi` discovers `.tasks.toml` from the caller's working directory, so a bare `tasks-axi` invocation run from the repo root can silently mutate the wrong home's backlog when `FM_HOME` points elsewhere.
 `bin/fm-tasks-axi.sh` closes this cwd trap: it resolves the effective `FM_HOME`, `cd`s into it before running `tasks-axi`, and refuses when the configured markdown path resolves outside that home.
 Always invoke `bin/fm-tasks-axi.sh <verb> ...` rather than bare `tasks-axi` for firstmate's own routine backlog mutations.
+Unless the backend is `manual`, bootstrap also detects existing drift and reports `TASKS_AXI: repo-root data/backlog.md differs from FM_HOME backlog - use bin/fm-tasks-axi.sh so tasks-axi runs from <home>` when the repo root and `FM_HOME` already have diverged `data/backlog.md` files.
 
 ## Runtime backend (config/backend / FM_BACKEND)
 
@@ -332,6 +333,7 @@ FM_BACKEND_CMUX_IDLE_RE='^Type a message\.\.\.$'  # cmux-only: empty-composer pl
 CMUX_SOCKET_PASSWORD=   # cmux-only: socket password fallback when config/cmux-socket-password is absent (docs/cmux-backend.md)
 FM_SESSION_START_STATUS_TAIL=5   # state/*.status lines printed per task in the session-start digest
 FM_BOOTSTRAP_DETECT_ONLY=0   # internal/read-only session-start mode: skip bootstrap's mutating sweeps and print advisory TANGLE wording
+FM_NO_MISTAKES_PROBE_TIMEOUT=3   # seconds bounding each bootstrap no-mistakes invocation; a dead or unreachable daemon degrades to the same MISSING line as an absent binary instead of hanging bootstrap
 FM_GUARD_READ_ONLY=0    # internal/read-only guard mode: keep alarms but suppress drain, supervision repair, and checkout repair commands
 FM_GUARD_CONTINUE_LINE='This is a supervision warning only; the guarded operation WILL still run.'   # banner continuation line; fm-send.sh overrides it to name the requested message specifically
 FM_POLL=15              # seconds between watcher poll cycles
