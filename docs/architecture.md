@@ -95,6 +95,15 @@ Only a named non-default branch checked out in `FM_ROOT` is a worktree tangle.
 If another live session holds the fleet lock, both surfaces keep the alarm but switch to read-only wording with no repair command.
 Ship briefs also tell the crewmate to verify `pwd -P` and `git rev-parse --show-toplevel` before creating `fm/<id>`, then stop with a blocked status if it landed in the primary checkout.
 
+## FM_HOME ownership guard
+
+`bin/fm-home-guard-lib.sh` closes a narrower gap: a shell whose cwd is inside a seeded secondmate home (marked by `.fm-secondmate-home`) but whose `FM_HOME` still points elsewhere.
+`fm-lock.sh`, `fm-spawn.sh`, `fm-supervise-daemon.sh`, `fm-tasks-axi.sh`, and `fm-wake-drain.sh` source it and call `fm_home_guard mutate <command-name>` before mutating; `fm-watch-arm.sh` calls it too, ahead of arming a watcher.
+When the context home (the secondmate home the shell is actually sitting in) and the effective `FM_HOME` disagree, a mutating call refuses with the mismatch and remediation, while a read-only call (`fm-tasks-axi.sh` in read mode) warns and continues.
+Primary homes are unaffected because they carry no `.fm-secondmate-home` marker.
+`fm-send.sh` is a separate, fail-closed case rather than a `fm_home_guard` caller: it refuses outright whenever `FM_HOME` is unset, so it never has a context-vs-effective-home mismatch to guard against.
+`fm-watch.sh` does not source this guard.
+
 ## Fleet freeze, stale-state reconciliation, and the usage tripwire
 
 `bin/fm-freeze.sh on [reason...]` writes local `state/.fleet-freeze`; while it exists, `fm-spawn.sh`, `fm-send.sh`, `fm-watch.sh`, `fm-watch-arm.sh`, and the away-mode daemon's injection path all refuse through the shared `fm-freeze-lib.sh` guard before doing anything else, so the fleet is parked without tearing anything down.
