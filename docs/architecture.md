@@ -33,6 +33,7 @@ For whole-fleet read-only review, `bin/fm-fleet-snapshot.sh --json` emits schema
 `bin/fm-fleet-view.sh` renders that snapshot as Markdown for humans, while `bin/fm-bearings-snapshot.sh` provides the bounded bearings projection, so both views consume one structured contract instead of reparsing raw fleet files.
 The script header owns the exact JSON schema.
 Optional X mode rides the same check path: the locked session-start bootstrap step drops a local `state/x-watch.check.sh` shim only after the user opts in with `FMX_PAIRING_TOKEN`, and non-X homes keep the default watcher behavior.
+Each cycle also scans pending `fm-send --expect-ack` deadlines (`bin/fm-ack-lib.sh`, backing `state/.pending-acks`): a target status write before its deadline clears the row silently, while a missed deadline wakes once with `ack-missed:` and marks the row escalated so it does not spam.
 
 At session start, `bin/fm-session-start.sh` emits exactly one primary-harness supervision block rendered by `bin/fm-supervision-instructions.sh` from `docs/supervision-protocols/`.
 That block owns the live wait shape for the running primary harness: Claude and Grok use background-notify cycles, Codex uses bounded foreground checkpoints, Pi uses its two tracked primary extensions, and OpenCode uses its TUI plugin.
@@ -93,6 +94,20 @@ Only a named non-default branch checked out in `FM_ROOT` is a worktree tangle.
 `fm-guard.sh` prints the repair command on the next mutable fleet action, while `bin/fm-session-start.sh` reports the same condition through bootstrap as a `TANGLE:` line at session start.
 If another live session holds the fleet lock, both surfaces keep the alarm but switch to read-only wording with no repair command.
 Ship briefs also tell the crewmate to verify `pwd -P` and `git rev-parse --show-toplevel` before creating `fm/<id>`, then stop with a blocked status if it landed in the primary checkout.
+
+## Fleet freeze, stale-state reconciliation, and the usage tripwire
+
+`bin/fm-freeze.sh on [reason...]` writes local `state/.fleet-freeze`; while it exists, `fm-spawn.sh`, `fm-send.sh`, `fm-watch.sh`, `fm-watch-arm.sh`, and the away-mode daemon's injection path all refuse through the shared `fm-freeze-lib.sh` guard before doing anything else, so the fleet is parked without tearing anything down.
+It is a blunt incident pause: it does not inspect, steer, or tear down any crewmate itself.
+`fm-freeze.sh off` lifts it, `fm-freeze.sh status` reports it, and `FM_FLEET_FREEZE_BYPASS=1` bypasses it for one deliberate command.
+The session-start digest surfaces an active freeze as its own subsection and steers the next-step reminder toward orchestration/diagnosis mode instead of a normal watcher arm; `bin/fm-guard.sh` reports the same frozen watcher-down state as an expected pause rather than a supervision lapse, and the daemon defers its own watcher restart attempts on a fixed interval while frozen instead of counting them as crashes.
+
+Two read-mostly tools guard against firstmate's own tracked state drifting from what is actually live.
+`bin/fm-fleet-map.sh` is a read-only diagnostic: it matches every tracked `state/*.meta` record against visible Herdr agents (or other backends' endpoint liveness) by exact target then by cwd, and reports `stale-tracked` records and `operator-untracked-herdr` agents; it never mutates anything.
+`bin/fm-reconcile-stale.sh` builds on that same matching (`fm-fleet-map-lib.sh`) plus a landed-work assessor (`fm-landed-work-lib.sh`) with carve-outs for `kind=secondmate` and `kind=scout` that mirror `fm-teardown.sh`. The assessor itself is deliberately more conservative than `fm-teardown.sh` and omits its PR-head patch-id containment fallback, so use `bin/fm-teardown.sh` directly for a squash-merge case it would recognize as landed but this assessor reports as unlanded or blocked.
+Its default mode is a dry run that writes nothing; `--clean <id> --yes` re-verifies the endpoint is dead, the work is landed, and the fleet is not frozen, then removes only that one id's volatile state files and `tasktmp`, never worktrees, homes, clones, branches, or backend endpoints.
+
+`bin/fm-usage-tripwire.sh` is a read-only watcher check born from a token-burn incident: it scans transcript files under `FM_USAGE_CLAUDE_DIR`/`FM_USAGE_CODEX_DIR` whose mtime falls in a sliding `FM_USAGE_WINDOW_MINUTES` window, counts them as a session-burst signal against `FM_USAGE_SESSION_THRESHOLD`, and separately sums each transcript line's own timestamped output tokens against `FM_USAGE_OUTPUT_THRESHOLD` so a long-lived, actively-appended session is not re-summed in full on every poll. It prints exactly one alarm line on a breach and nothing when healthy, matching the `state/<id>.check.sh` watcher-check contract; arm it with `ln -sf "$(pwd -P)/bin/fm-usage-tripwire.sh" state/usage-tripwire.check.sh`.
 
 ## Two task shapes
 
