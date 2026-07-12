@@ -110,6 +110,7 @@ state/               volatile runtime signals; gitignored
   .watch-triage.log  watcher's absorbed-wake debug log (size-capped); never relied on, safe to delete
   .last-watcher-beat watcher liveness beacon, touched every poll (including while absorbing benign wakes); guard scripts read it
   .subsuper-* .supervise-daemon.*   sub-supervisor internals; never touch
+  .pi-watch-extension-loaded .pi-turnend-extension-loaded   pi-harness session-start markers hashing the loaded `.pi/extensions/*.ts` content; never touch
 .no-mistakes/        local validation state and evidence; gitignored
 ```
 

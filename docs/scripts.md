@@ -9,6 +9,7 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `fm-session-start.sh`            | Compose lock, bootstrap, and wake drain into the single ordered session-start digest                                                                        |
 | `fm-bootstrap.sh`                | Detect toolchain and fleet problems, run the locked session-start sweeps, and install approved tools                                                        |
 | `fm-lint.sh`                     | Single owner of the ShellCheck lint definition and pinned version; run by CI and the no-mistakes gate                                                       |
+| `fm-install-shellcheck.sh`       | Install CI's pinned, verified ShellCheck build into a destination directory                                                                                 |
 | `fm-fleet-sync.sh`               | Refresh project clones with safe fast-forwards, self-heals, `STUCK:` reports, branch pruning, and bounded recovery from an orphaned `.git/packed-refs.lock` |
 | `fm-fleet-snapshot.sh`           | Print the read-only structured fleet snapshot JSON (schema `fm-fleet-snapshot.v1`)                                                                          |
 | `fm-fleet-view.sh`               | Render the fleet snapshot as a human Markdown view                                                                                                          |
@@ -21,8 +22,12 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `fm-guard.sh`                    | Warn on primary-checkout tangles, pending queued wakes, and stale watcher liveness                                                                          |
 | `fm-turnend-guard.sh`            | Shared primary turn-end guard predicate so no turn ends blind (docs/turnend-guard.md)                                                                       |
 | `fm-turnend-guard-grok.sh`       | Grok Stop-hook adapter for the primary turn-end guard                                                                                                       |
+| `fm-freeze.sh`                   | Toggle or report the local fleet-freeze incident-pause flag: on/off/status                                                                                  |
+| `fm-freeze-lib.sh`               | Shared fleet-freeze guard sourced by every mutating entrypoint to refuse while frozen                                                                       |
 | `fm-arm-pretool-check.sh`        | Stable PreToolUse transport for the watcher-arm command policy (docs/arm-pretool-check.md)                                                                  |
 | `fm-arm-command-policy.mjs`      | Semantic owner of the watcher-arm PreToolUse policy (docs/arm-pretool-check.md)                                                                             |
+| `fm-cd-pretool-check.sh`         | Stable PreToolUse transport for the cd-guard command policy (docs/cd-guard.md)                                                                              |
+| `fm-cd-command-policy.mjs`       | Semantic owner of the cd-guard PreToolUse policy blocking persistent primary-shell cd (docs/cd-guard.md)                                                    |
 | `fm-supervision-instructions.sh` | Render the session-start primary-harness supervision block or the one-line repair instruction                                                               |
 | `fm-home-seed.sh`                | Transactionally provision a secondmate home and maintain `data/secondmates.md`                                                                              |
 | `fm-spawn.sh`                    | Spawn crewmates, scouts, `id=repo` batches, and secondmates on the resolved harness and runtime backend                                                     |
@@ -30,11 +35,13 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `fm-backend.sh`                  | Runtime-backend selection, meta helpers, selector resolution, and operation dispatch                                                                        |
 | `fm-backend-hometag-lib.sh`      | Shared per-installation home-tag derivation for zellij tab and cmux workspace titles                                                                        |
 | `fm-composer-lib.sh`             | Single fleet-wide owner of composer-content classification for all backends                                                                                 |
+| `fm-transition-lib.sh`           | Shared backend-neutral agent-state transition record shape and push-escalation policy table                                                                 |
 | `backends/tmux.sh`               | Verified tmux session-provider adapter                                                                                                                      |
 | `backends/herdr.sh`              | Experimental herdr session-provider adapter                                                                                                                 |
 | `backends/zellij.sh`             | Experimental zellij session-provider adapter                                                                                                                |
 | `backends/orca.sh`               | Experimental Orca backend adapter owning both worktree and terminal                                                                                         |
 | `backends/cmux.sh`               | Experimental cmux session-provider adapter                                                                                                                  |
+| `backends/herdr-eventwait.py`    | Raw AF_UNIX wire-transport subscriber for herdr's native pane status-change stream                                                                          |
 | `fm-config-push.sh`              | Push declared inheritable local config to live secondmate homes mid-session                                                                                 |
 | `fm-project-mode.sh`             | Resolve a project's delivery mode and `+yolo` flag from `data/projects.md`                                                                                  |
 | `fm-merge-local.sh`              | Fast-forward a `local-only` project's local default branch after approval                                                                                   |
@@ -48,21 +55,29 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `fm-supervisor-target-lib.sh`    | Resolve the shared supervisor target and backend for the daemon and launcher                                                                                |
 | `fm-supervise-daemon.sh`         | Presence-gated away-mode sub-supervisor: self-handle routine wakes, escalate batched digests, alert on failed delivery                                      |
 | `fm-crew-state.sh`               | Print one deterministic current-state line for a crew                                                                                                       |
+| `fm-usage-tripwire.sh`           | Read-only watcher check alarming once on an abnormal token/session usage burst                                                                              |
 | `fm-tangle-lib.sh`               | Shared default-branch resolution and primary-checkout tangle classification                                                                                 |
 | `fm-supervision-lib.sh`          | Shared in-flight-work-without-fresh-watcher-beacon predicate                                                                                                |
 | `fm-ff-lib.sh`                   | Shared guarded fast-forward helper for origin pulls and local secondmate syncs                                                                              |
 | `fm-lock-lib.sh`                 | Shared "is this git lock provably abandoned?" proof used by teardown and fleet-sync                                                                         |
+| `fm-home-guard-lib.sh`           | Shared FM_HOME ownership guard sourced by every mutating entrypoint                                                                                         |
 | `fm-config-inherit-lib.sh`       | Shared primary-to-secondmate inheritable-config propagation                                                                                                 |
 | `fm-tasks-axi-lib.sh`            | Shared backlog-backend selector and `tasks-axi` compatibility probe                                                                                         |
+| `fm-tasks-axi.sh`                | Run tasks-axi against the effective FM_HOME regardless of caller cwd                                                                                        |
 | `fm-wake-drain.sh`               | Atomically drain queued watcher wakes, then assert watcher liveness                                                                                         |
 | `fm-wake-lib.sh`                 | Shared durable wake queue, portable locks, and watcher identity/health helpers                                                                              |
 | `fm-classify-lib.sh`             | Shared captain-relevant and declared-external-wait wake classification vocabulary                                                                           |
 | `fm-send.sh`                     | Send one verified literal line or supported key through the target's recorded backend                                                                       |
+| `fm-ack-lib.sh`                  | Shared --expect-ack pending-acknowledgement tracking and ack-missed escalation helpers                                                                      |
 | `fm-tmux-lib.sh`                 | Shared tmux pane primitives for busy detection, composer capture, and verified submit                                                                       |
 | `fm-peek.sh`                     | Print a bounded tail of a crewmate endpoint                                                                                                                 |
 | `fm-pr-check.sh`                 | Record `pr=` and `pr_head=` for a PR-ready task, then arm the watcher's merge poll                                                                          |
 | `fm-pr-merge.sh`                 | Record PR metadata, then merge a task's PR from its full GitHub URL                                                                                         |
 | `fm-promote.sh`                  | Promote a scout task in place to a protected ship task                                                                                                      |
+| `fm-fleet-map.sh`                | Read-only diagnostic reconciling tracked state against the live Herdr surface                                                                               |
+| `fm-fleet-map-lib.sh`            | Shared tracked-state/live-endpoint reconciliation helpers for fm-fleet-map.sh and fm-reconcile-stale.sh                                                     |
+| `fm-landed-work-lib.sh`          | Shared, more-conservative landed-work assessor sourced by fm-reconcile-stale.sh                                                                             |
+| `fm-reconcile-stale.sh`          | Dry-run-first reporter, then guarded --clean, for tracked state with no live backend endpoint                                                               |
 | `fm-teardown.sh`                 | Fail-closed teardown: return landed ship worktrees, require scout reports, retire secondmate homes                                                          |
 | `fm-harness.sh`                  | Detect the running harness and resolve crew or secondmate harness, model, and effort                                                                        |
 | `fm-lock.sh`                     | Per-home firstmate session lock                                                                                                                             |
