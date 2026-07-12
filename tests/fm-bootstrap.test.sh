@@ -270,6 +270,23 @@ ROWS
   pass "bootstrap reports treehouse lease + tasks-axi/quota-axi bootstrap contracts"
 }
 
+test_tasks_axi_cwd_trap_warning() {
+  local case_dir fakebin root home out expected
+  case_dir="$TMP_ROOT/tasks-axi-cwd-trap"
+  root="$case_dir/root"
+  home="$case_dir/home"
+  mkdir -p "$root/data" "$home/data"
+  printf '%s\n' "repo-root backlog" > "$root/data/backlog.md"
+  printf '%s\n' "home backlog" > "$home/data/backlog.md"
+  fakebin=$(make_fake_toolchain "$case_dir")
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$root" \
+    FM_BOOTSTRAP_DETECT_ONLY=1 FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  expected=$(printf 'TASKS_AXI: repo-root data/backlog.md differs from FM_HOME backlog - use bin/fm-tasks-axi.sh so tasks-axi runs from %s\nTASKS_AXI: available' "$(cd "$home" && pwd -P)")
+  [ "$out" = "$expected" ] || fail "diverged FM_HOME backlog should warn before availability"$'\n'"expected: $expected"$'\n'"got: $out"
+  pass "bootstrap warns when repo-root and FM_HOME backlogs diverge"
+}
+
 test_no_mistakes_min_version() {
   local label version mode case_dir fakebin out missing n
   missing='MISSING: no-mistakes (install: curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh)'
@@ -526,6 +543,7 @@ ROWS
 }
 
 test_bootstrap_reporting
+test_tasks_axi_cwd_trap_warning
 test_no_mistakes_min_version
 test_no_mistakes_probe_timeout
 test_git_is_required_with_supported_install_instruction
