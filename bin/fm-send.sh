@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Send one line of literal text to a crewmate endpoint, then Enter.
 # Usage: fm-send.sh [--expect-ack <minutes>] <target> <text...>
-#   <target> must be either a firstmate task selector (fm-xyz), resolved
+#   <target> may be an exact task id, a legacy fm-<id> task label resolved
 #   through this home's state/<id>.meta, or an explicit well-formed backend
-#   target. fm-send refuses unresolved/bare guesses rather than falling back to
-#   a tmux window search, because a "successful" send to the wrong endpoint is
+#   target. fm-send refuses unresolved guesses rather than falling back to a
+#   tmux window search, because a "successful" send to the wrong endpoint is
 #   worse than a loud failure.
 #   --expect-ack records a pending acknowledgement for a task/lane target after
 #   a successful text send. The target acknowledges by writing any status line;
@@ -14,33 +14,25 @@
 # Orca currently supports Enter and C-c only, and rejects Escape.
 #
 # Text submission is verified: the line is typed ONCE, then Enter is sent and
-# retried (Enter only, never retyped) until the target backend reports a
-# submitted/cleared composer or an inconclusive send. If a swallowed Enter is
-# positively confirmed (the text is still sitting in the composer after all
-# retries), fm-send exits NON-ZERO so the caller knows the steer did not land
-# instead of silently leaving an unsubmitted instruction. An unreadable
-# ("unknown") pane is normally treated as sent. Popup-risk sends (slash
-# commands, and codex `$...` skill invocations) hard-fail on unknown unless the
-# backend shows an idle-to-busy transition caused by this send: busy-state is
-# read before sending and again after, and only a pane that was NOT busy before
-# and IS busy after counts as proof the agent consumed the message. A pane that
-# was already busy before the send proves nothing about this particular
-# message, so it still hard-fails.
+# retried (Enter only, never retyped) until the target backend confirms a
+# submit or reports an inconclusive send. If a swallowed Enter is positively
+# confirmed, fm-send exits NON-ZERO so the caller knows the steer did not land
+# instead of silently leaving an unsubmitted instruction.
 # Submission dispatches through the target's recorded backend; the tmux adapter
 # shares its composer/submit core with the away-mode daemon via bin/fm-tmux-lib.sh.
 # Tune with FM_SEND_RETRIES (default 3) / FM_SEND_SLEEP (0.4).
 # Slash commands, and codex `$...` skill invocations resolved through harness
 # meta, get a longer pre-Enter settle so completion popups do not swallow Enter.
 #
-# From-firstmate marker: when the resolved target is a bare `fm-<id>` whose meta
+# From-firstmate marker: when the resolved target is a task selector whose meta
 # records kind=secondmate, the text is prefixed with the from-firstmate marker
 # (bin/fm-marker-lib.sh) so the secondmate routes its reply via its status file
 # or a status-pointed doc instead of stranding it in chat the main firstmate
 # never reads. A crewmate/scout target, an explicit backend-target escape-hatch
 # target, and the --key path are never marked - their behavior is unchanged.
 # After a successful text submit fm-send pauses FM_SEND_SETTLE seconds (default 1,
-# 0 disables) before returning: a cleared composer only proves the text was
-# submitted, but the harness needs a beat to spin up the turn before its busy
+# 0 disables) before returning: submit confirmation only proves the text was
+# accepted, but the harness needs a beat to spin up the turn before its busy
 # footer appears, so an immediate peek would otherwise see the stale idle pane.
 # The pause is fm-send-only; the shared submit core (used by the away-mode daemon,
 # which only needs "submitted") does not pay it, and the --key path is unaffected.
@@ -64,9 +56,6 @@ if [ ! -d "$STATE" ]; then
   exit 1
 fi
 
-# shellcheck source=bin/fm-home-guard-lib.sh
-. "$SCRIPT_DIR/fm-home-guard-lib.sh"
-fm_home_guard mutate "fm-send.sh" || exit 1
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-marker-lib.sh
@@ -104,48 +93,41 @@ fm_send_count_colons() {  # <string>
 }
 
 fm_send_resolve_target() {  # <raw-target>
-  local raw=$1 meta stripped_meta direct_meta pane_meta target backend assumed colons id session hint
+  local raw=$1 meta pane_meta target backend assumed colons id session hint
 
   RESOLVED_TARGET=""
   TARGET_BACKEND=""
   TARGET_HARNESS=""
   EXPECTED_LABEL=""
   TARGET_META=""
+  TARGET_SELECTOR=""
   RESOLUTION_TRIED=""
+
+  meta=$(fm_backend_meta_for_selector "$raw" "$STATE" 2>/dev/null || true)
+  if [ -n "$meta" ]; then
+    RESOLUTION_TRIED="meta=$meta; backend=from-meta"
+    target=$(fm_backend_target_of_meta "$meta")
+    if [ -z "$target" ]; then
+      echo "error: no backend target recorded in $meta (tried $RESOLUTION_TRIED)" >&2
+      return 1
+    fi
+    backend=$(fm_backend_of_meta "$meta")
+    RESOLVED_TARGET=$target
+    TARGET_BACKEND=$backend
+    TARGET_META=$meta
+    TARGET_HARNESS=$(fm_meta_get "$meta" harness)
+    EXPECTED_LABEL=$(fm_backend_expected_label_of_selector "$raw" "$STATE")
+    TARGET_SELECTOR=1
+    return 0
+  fi
 
   case "$raw" in
     fm-*)
-      stripped_meta="$STATE/${raw#fm-}.meta"
-      direct_meta="$STATE/$raw.meta"
-      RESOLUTION_TRIED="meta=$stripped_meta; bare-id-meta=$direct_meta; backend=from-meta"
-      if [ ! -f "$stripped_meta" ]; then
-        if [ -f "$direct_meta" ]; then
-          echo "error: target '$raw' is a bare task/lane id with metadata at $direct_meta; did you mean fm-$raw? (tried $RESOLUTION_TRIED)" >&2
-          return 1
-        fi
-        echo "error: no metadata for $raw in $STATE (tried $RESOLUTION_TRIED); pass a well-formed explicit backend target only when targeting outside this firstmate home" >&2
-        return 1
-      fi
-      target=$(fm_backend_target_of_meta "$stripped_meta")
-      if [ -z "$target" ]; then
-        echo "error: no backend target recorded in $stripped_meta (tried $RESOLUTION_TRIED)" >&2
-        return 1
-      fi
-      backend=$(fm_backend_of_meta "$stripped_meta")
-      RESOLVED_TARGET=$target
-      TARGET_BACKEND=$backend
-      TARGET_META=$stripped_meta
-      TARGET_HARNESS=$(fm_meta_get "$stripped_meta" harness)
-      EXPECTED_LABEL=$raw
-      return 0
+      RESOLUTION_TRIED="meta=$STATE/$raw.meta; legacy-meta=$STATE/${raw#fm-}.meta; backend=none"
+      echo "error: no metadata for $raw in $STATE (tried $RESOLUTION_TRIED); pass a well-formed explicit backend target only when targeting outside this firstmate home" >&2
+      return 1
       ;;
   esac
-
-  direct_meta="$STATE/$raw.meta"
-  if [ -f "$direct_meta" ]; then
-    echo "error: target '$raw' is a bare task/lane id with metadata at $direct_meta; did you mean fm-$raw? (tried meta=$direct_meta; backend=none)" >&2
-    return 1
-  fi
 
   pane_meta=$(fm_send_meta_for_key_value "$STATE" herdr_pane_id "$raw" 2>/dev/null || true)
   if [ -n "$pane_meta" ]; then
@@ -228,35 +210,27 @@ shift
 fm_backend_validate "$TARGET_BACKEND" || exit 1
 
 if [ -n "$EXPECT_ACK_MINUTES" ]; then
-  case "$RAW_TARGET" in
-    fm-*) : ;;
-    *)
-      echo "error: cannot expect-ack a raw pane target '$RAW_TARGET'; use fm-<id> so the target has a status file" >&2
-      exit 1
-      ;;
-  esac
+  if [ -z "$TARGET_SELECTOR" ] || [ -z "$TARGET_META" ]; then
+    echo "error: cannot expect-ack a raw pane target '$RAW_TARGET'; use a task selector so the target has a status file" >&2
+    exit 1
+  fi
 fi
 
-# Mark a from-firstmate -> secondmate request. Only a bare `fm-<id>` target,
-# resolved through this home's meta and recording kind=secondmate, is marked: the
+# Mark a from-firstmate -> secondmate request. Only a task selector resolved
+# through this home's meta and recording kind=secondmate is marked: the
 # secondmate then routes its reply via the status path (see fm-marker-lib.sh).
 # An explicit backend target (the escape hatch for endpoints outside this home)
 # and any crewmate/scout target are left unmarked, and so is the --key path.
 MARK_PREFIX=""
-case "$RAW_TARGET" in
-  fm-*)
-    meta="$TARGET_META"
-    if [ -f "$meta" ] && grep -q '^kind=secondmate$' "$meta" 2>/dev/null; then
-      MARK_PREFIX="$FM_FROMFIRST_MARK"
-    fi
-    ;;
-esac
+if [ -n "$TARGET_SELECTOR" ] && [ -n "$TARGET_META" ] && grep -q '^kind=secondmate$' "$TARGET_META" 2>/dev/null; then
+  MARK_PREFIX="$FM_FROMFIRST_MARK"
+fi
 
 # Resolve the target's harness from its meta (recorded by fm-spawn), used only to
-# scope the codex `$<skill>` popup-settle below. A bare fm-<id> target carries
+# scope the codex `$<skill>` popup-settle below. A task selector carries
 # meta; an explicit backend-target escape hatch has none, so its harness is
 # unknown and treated as non-codex (the safe default that keeps the fast path).
-# The target's BACKEND comes from fm-<id> meta, from matching an explicit target
+# The target's BACKEND comes from selector meta, from matching an explicit target
 # back to recorded meta, or from strict explicit-target shape validation.
 # Do not add a separate passive liveness preflight here. Active send paths own
 # backend readiness: herdr, for example, must route through its session-aware
@@ -290,36 +264,17 @@ else
   # starts ordinary text ("$5/month", "$HOME"), so a universal `$` rule would
   # needlessly slow plain text to claude/opencode/pi. The target backend's
   # verified submit retry still backs the settle up either way.
-  require_verified_submit=0
   case "$*" in
-    /*) settle=1.2; require_verified_submit=1 ;;
+    /*) settle=1.2 ;;
     \$*)
-      if [ "$TARGET_HARNESS" = codex ]; then
-        settle=1.2
-        require_verified_submit=1
-      else
-        settle=0.3
-      fi
+      if [ "$TARGET_HARNESS" = codex ]; then settle=1.2; else settle=0.3; fi
       ;;
     *) settle=0.3 ;;
   esac
   retries=${FM_SEND_RETRIES:-3}
   sleep_s=${FM_SEND_SLEEP:-0.4}
-  # Snapshot busy-state before sending so an unreadable popup-risk verdict can
-  # later be checked for an idle-to-busy transition actually caused by this
-  # send, rather than trusting a pane that may have already been busy from
-  # unrelated prior work.
-  pre_busy_state=
-  if [ "$require_verified_submit" = 1 ]; then
-    pre_busy_state=$(fm_backend_busy_state "$TARGET_BACKEND" "$T")
-  fi
-  # Type once, submit, verify. Lenient by default: only a positively-confirmed
-  # swallow (text still in the composer) is an error; an unreadable pane is
-  # assumed sent. Popup-risk sends (require_verified_submit=1, set above for
-  # slash commands and codex `$...` invocations) are the exception: those also
-  # fail on an unreadable ("unknown") verdict unless the target shows a fresh
-  # idle-to-busy transition, which means this send is what made the agent
-  # start working.
+  # Type once, submit, verify. Lenient: only a positively-confirmed swallow
+  # (text still in the composer) is an error; an unreadable pane is assumed sent.
   if ! verdict=$(fm_backend_send_text_submit "$TARGET_BACKEND" "$T" "$MARK_PREFIX$*" "$retries" "$sleep_s" "$settle" "$EXPECTED_LABEL"); then
     echo "error: text not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
     exit 1
@@ -333,18 +288,9 @@ else
       echo "error: text not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
       exit 1
       ;;
-    unknown)
-      if [ "$require_verified_submit" = 1 ]; then
-        busy_state=$(fm_backend_busy_state "$TARGET_BACKEND" "$T")
-        if [ "$busy_state" != busy ] || [ "$pre_busy_state" = busy ]; then
-          echo "error: text submission to $T could not be verified (popup-risk send reported unknown; tried $RESOLUTION_TRIED)" >&2
-          exit 1
-        fi
-      fi
-      ;;
   esac
-  # Submit landed (verdict was not pending/send-failed). The cleared composer only
-  # proves the text was submitted; the harness still needs a beat to spin up the
+  # Submit landed (verdict was not pending/send-failed). Confirmation only proves
+  # the text was accepted; the harness still needs a beat to spin up the
   # turn before its busy footer shows. Pause so an immediate peek catches the
   # crewmate actually working instead of the stale idle pane. FM_SEND_SETTLE=0
   # disables it. Scoped to this path only, never the shared submit core.
