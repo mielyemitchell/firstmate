@@ -67,6 +67,32 @@ SH
   printf '%s\n' "$fb"
 }
 
+make_herdr_stubs() {  # <dir> -> echoes fakebin dir
+  local dir=$1 fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+{
+  printf 'HERDR_SESSION=%s' "${HERDR_SESSION:-}"
+  for a in "$@"; do printf '\x1f%s' "$a"; done
+  printf '\n'
+} >> "$FM_HERDR_LOG"
+if [ "${1:-}" = status ] && [ "${2:-}" = --json ]; then
+  printf '{"client":{"version":"0.7.2","protocol":16},"server":{"running":true}}\n'
+fi
+exit 0
+SH
+  chmod +x "$fb/herdr"
+  cat > "$fb/sleep" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "${1:-}" >> "$FM_SLEEP_LOG"
+exit 0
+SH
+  chmod +x "$fb/sleep"
+  printf '%s\n' "$fb"
+}
+
 # first_settle <expected> <label> <harness|--explicit> <message> [selector-form]: build a fresh
 # home, send <message> to a target whose meta records <harness> (or to a bare
 # session:window with NO meta when --explicit), and assert the FIRST recorded sleep
@@ -136,3 +162,27 @@ first_settle 1.2 'codex /command -> long settle (slash unchanged)' codex '/help'
 
 # Plain text to codex takes the fast path - the codex scope is `$`-prefixed only.
 first_settle 0.3 'codex plain text -> fast path' codex 'just a normal steer'
+
+test_codex_dollar_unknown_submit_verdict_fails_loudly() {
+  local dir fb home log sleeps err rc got enter_count
+  dir="$TMP_ROOT/codex-dollar-unknown"; mkdir -p "$dir/state"
+  fb=$(make_herdr_stubs "$dir"); home="$dir"; log="$dir/herdr.log"; sleeps="$dir/sleep.log"; err="$dir/send.err"
+  : > "$log"; : > "$sleeps"
+  fm_write_meta "$home/state/codexherdr.meta" \
+    "window=default:w1:p2" "backend=herdr" "harness=codex" "kind=ship"
+
+  env FM_SEND_SETTLE=0 PATH="$fb:$PATH" \
+    FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_HERDR_LOG="$log" FM_SLEEP_LOG="$sleeps" \
+    "$SEND" fm-codexherdr '$no-mistakes' >/dev/null 2>"$err"; rc=$?
+  [ "$rc" -ne 0 ] || fail "codex \$skill over herdr must fail when submit verification is unknown"
+  got=$(cat "$log")
+  assert_contains "$got" $'\x1f''pane'$'\x1f''send-text'$'\x1f''w1:p2'$'\x1f''$no-mistakes' \
+    "codex dollar test did not type the literal skill invocation"
+  enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
+  [ "$enter_count" -ge 1 ] || fail "codex dollar test never attempted Enter"
+  assert_contains "$(cat "$err")" "could not be verified" \
+    "codex dollar unknown-verdict failure should explain that submission was not verified"
+  pass "fm-send popup-settle: codex \$skill over herdr fails loudly on unknown submit verification"
+}
+
+test_codex_dollar_unknown_submit_verdict_fails_loudly

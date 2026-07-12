@@ -155,7 +155,7 @@ run_bootstrap_timeout_case() {
   wait_for_marker=${7:-0}
   [ "$#" -lt 4 ] || override=$4
   (
-    # shellcheck disable=SC2317,SC2329 # Exported and invoked by the bootstrap subprocess.
+    # shellcheck disable=SC2030,SC2031,SC2317,SC2329 # Exported fake clock invoked by the bootstrap subprocess.
     sleep() {
       local inc=${1:-1}
       SECONDS=$((SECONDS + inc))
@@ -164,7 +164,7 @@ run_bootstrap_timeout_case() {
         command sleep 0.01
       fi
     }
-    # shellcheck disable=SC2317,SC2329 # Exported and invoked by the bootstrap subprocess.
+    # shellcheck disable=SC2030,SC2031,SC2317,SC2329 # Exported fake clock invoked by the bootstrap subprocess.
     git() {
       local tries
       if [ "${FM_FAKE_GIT_WAIT_FOR_FLEET_START:-}" = 1 ] && [ -n "${FM_FAKE_FLEET_SYNC_STARTED_MARKER:-}" ]; then
@@ -299,6 +299,39 @@ older no-mistakes patch reports an upgrade^no-mistakes version v1.31.1 (fake)^mi
 unparseable no-mistakes version reports an upgrade^no-mistakes development build^missing
 ROWS
   pass "bootstrap enforces no-mistakes minimum version"
+}
+
+test_no_mistakes_probe_timeout() {
+  local case_dir fakebin out expected
+  case_dir="$TMP_ROOT/no-mistakes-timeout"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  cat > "$fakebin/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then
+  exec perl -e 'sleep 300'
+fi
+exit 0
+SH
+  chmod +x "$fakebin/no-mistakes"
+
+  out=$(
+    # shellcheck disable=SC2030,SC2031,SC2317,SC2329 # Exported fake clock invoked by the bootstrap subprocess.
+    sleep() {
+      local inc=${1:-1}
+      if [ "${inc#*.}" != "$inc" ]; then
+        inc=1
+      fi
+      SECONDS=$((SECONDS + inc))
+    }
+    export -f sleep
+    PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+      FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_NO_MISTAKES_PROBE_TIMEOUT=1 "$ROOT/bin/fm-bootstrap.sh"
+  )
+  expected='MISSING: no-mistakes (install: curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh)'
+  [ "$out" = "$expected" ] || fail "hung no-mistakes probe should degrade to MISSING, got: $out"
+  pass "bootstrap bounds no-mistakes version probes"
 }
 
 test_git_is_required_with_supported_install_instruction() {
@@ -494,6 +527,7 @@ ROWS
 
 test_bootstrap_reporting
 test_no_mistakes_min_version
+test_no_mistakes_probe_timeout
 test_git_is_required_with_supported_install_instruction
 test_orca_backend_gates_orca_tool_only_when_selected
 test_fleet_sync_timeout_scales_with_origin_backed_project_count
