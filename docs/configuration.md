@@ -9,7 +9,7 @@ The shared orchestrator behavior lives in [`AGENTS.md`](../AGENTS.md) - edit it 
 ## Backlog backend (.tasks.toml / config/backlog-backend)
 
 The tracked `.tasks.toml` pins the default `tasks-axi` markdown backend to `data/backlog.md`, with `done_keep = 10` and an archive at `data/done-archive.md`.
-When the default backend is selected and compatible `tasks-axi` is on `PATH`, firstmate uses its verbs for routine backlog mutations.
+When the default backend is selected and compatible `tasks-axi` is on `PATH`, firstmate uses `bin/fm-tasks-axi.sh` for routine backlog mutations.
 Secondmate handoffs are separate and unconditional: `fm-backlog-handoff.sh` keeps only its own fleet-level validation and always delegates the item move to `tasks-axi mv`, the single owner of the backlog format.
 It moves in-scope `## Queued` items only and refuses `## In flight` and historical `## Done` records, which stay with their home for pruning or archiving.
 Handoff item bodies must use at least two leading spaces, and the helper refuses a selected item with a single-space or tab-indented continuation rather than risk orphaning it.
@@ -20,6 +20,10 @@ Bootstrap requires compatible `tasks-axi` on every profile; see "Toolchain" belo
 Set the local, gitignored `config/backlog-backend` file to `manual` to force manual backlog editing and suppress `TASKS_AXI: available`, not missing-tool reporting.
 Absent or `tasks-axi` selects the default tasks-axi backend.
 The file format is unchanged in both modes; tasks-axi and manual edits produce the same `## In flight`, `## Queued`, and `## Done` sections.
+
+`tasks-axi` discovers `.tasks.toml` from the caller's working directory, so a bare `tasks-axi` invocation run from the repo root can silently mutate the wrong home's backlog when `FM_HOME` points elsewhere.
+`bin/fm-tasks-axi.sh` closes this cwd trap: it resolves the effective `FM_HOME`, `cd`s into it before running `tasks-axi`, and refuses when the configured markdown path resolves outside that home.
+Always invoke `bin/fm-tasks-axi.sh <verb> ...` rather than bare `tasks-axi` for firstmate's own routine backlog mutations.
 
 ## Runtime backend (config/backend / FM_BACKEND)
 
@@ -176,13 +180,21 @@ This section is the single owner of the canonical schema and its per-field seman
     {
       "when": "<natural-language condition describing a kind of task>",
       "use": [
-        { "harness": "<adapter>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max, optional>" }
+        {
+          "harness": "<adapter>",
+          "model": "<optional model>",
+          "effort": "<low|medium|high|xhigh|max, optional>"
+        }
       ],
       "select": "<optional strategy>",
       "why": "<optional rationale that helps firstmate choose>"
     }
   ],
-  "default": { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>" }
+  "default": {
+    "harness": "<adapter>",
+    "model": "<optional model>",
+    "effort": "<optional effort>"
+  }
 }
 ```
 
@@ -212,7 +224,7 @@ When bootstrap resolves `backend=orca` from `FM_BACKEND` or `config/backend`, it
 When `config/crew-dispatch.json` exists, bootstrap also requires `jq` for dispatch profile validation.
 When X mode is opted in, bootstrap also requires `curl` and `jq` before arming the relay poll shim.
 `tasks-axi` and `quota-axi` are required bootstrap tools in every profile, the same class as `lavish-axi`.
-An absent or incompatible `tasks-axi` reports `MISSING: tasks-axi (install: npm install -g tasks-axi)`; when `config/backlog-backend` is not `manual` and compatible `tasks-axi` is on `PATH`, bootstrap also prints `TASKS_AXI: available` and firstmate uses its verbs for routine backlog mutations, otherwise it hand-edits `data/backlog.md` until installation is approved and completed.
+An absent or incompatible `tasks-axi` reports `MISSING: tasks-axi (install: npm install -g tasks-axi)`; when `config/backlog-backend` is not `manual` and compatible `tasks-axi` is on `PATH`, bootstrap also prints `TASKS_AXI: available` and firstmate uses `bin/fm-tasks-axi.sh` for routine backlog mutations, otherwise it hand-edits `data/backlog.md` until installation is approved and completed.
 An absent `quota-axi` reports `MISSING: quota-axi (install: npm install -g quota-axi)`; `bin/fm-dispatch-select.sh` still degrades to the first profile at runtime when quota data is unavailable.
 Bootstrap also reports a `TANGLE:` line when `FM_ROOT` is on a named non-default branch; follow the printed checkout remediation rather than treating it as an installable tool problem.
 In a read-only session that did not get the fleet lock, the same line is advisory and omits the checkout command.
