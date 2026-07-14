@@ -47,6 +47,7 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `fm-merge-local.sh`              | Fast-forward a `local-only` project's local default branch after approval                                                                                   |
 | `fm-review-diff.sh`              | Review a crewmate branch or recorded PR head against the authoritative base                                                                                 |
 | `fm-marker-lib.sh`               | Shared from-firstmate request marker and detector                                                                                                           |
+| `fm-gate-refuse-lib.sh`          | Shared no-mistakes gate-context refusal for fleet lifecycle entrypoints                                                                                      |
 | `fm-watch-arm.sh`                | Verified home-scoped watcher arm wrapper with honest status reporting                                                                                       |
 | `fm-watch-checkpoint.sh`         | Run one bounded foreground watcher checkpoint for Codex-style supervision                                                                                   |
 | `fm-watch.sh`                    | Singleton-safe always-on watcher: absorb benign wakes, queue and exit on actionable ones                                                                    |
