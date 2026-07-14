@@ -8,6 +8,7 @@ set -u
 FREEZE="$ROOT/bin/fm-freeze.sh"
 SPAWN="$ROOT/bin/fm-spawn.sh"
 SEND="$ROOT/bin/fm-send.sh"
+WATCH="$ROOT/bin/fm-watch.sh"
 TMP_ROOT=$(fm_test_tmproot fm-freeze-tests)
 
 new_home() {
@@ -66,6 +67,20 @@ test_send_refuses_while_frozen() {
   pass "fm-send.sh refuses while fleet freeze is active"
 }
 
+test_watch_refuses_while_frozen() {
+  local home out status
+  home=$(new_home watch-refuse)
+  FM_HOME="$home" "$FREEZE" on "parked" >/dev/null
+
+  status=0
+  out=$(FM_HOME="$home" "$WATCH" 2>&1) || status=$?
+
+  expect_code 1 "$status" "frozen watcher should exit 1"
+  assert_contains "$out" "fleet frozen: watch refused" "watch did not refuse because of freeze"
+
+  pass "fm-watch.sh refuses while fleet freeze is active"
+}
+
 test_spawn_bypass_is_explicit_one_command() {
   local home out status
   home=$(new_home spawn-bypass)
@@ -84,4 +99,5 @@ test_spawn_bypass_is_explicit_one_command() {
 test_freeze_on_status_off
 test_spawn_refuses_while_frozen
 test_send_refuses_while_frozen
+test_watch_refuses_while_frozen
 test_spawn_bypass_is_explicit_one_command

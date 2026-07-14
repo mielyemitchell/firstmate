@@ -12,7 +12,7 @@ fm_home_guard mutate "fm-wake-drain.sh" || exit 1
 DRAIN_TMP=
 DRAIN_LOCK_HELD=false
 
-# Defense in depth for the watcher re-arm chain: this script runs at the top of
+# Defense in depth for the supervision chain: this script runs at the top of
 # every wake-handling and recovery turn, so assert watcher liveness here too. A
 # lapsed supervision chain then surfaces on a plain drain-and-handle turn, not
 # only when a guarded supervision script (fm-peek/fm-send/...) happens to run.

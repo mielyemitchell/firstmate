@@ -26,6 +26,8 @@
 # marker) with no explicit backend setting - unlike Orca, which stays
 # never-auto-detected because it also owns the task worktree; see
 # docs/cmux-backend.md for its empirical basis.
+# Codex App is intentionally not in the known set yet.
+# docs/codex-app-backend.md owns that blocked backend contract.
 #
 # Compatibility contract: a task's meta may omit `backend=`; every reader here
 # treats that as `tmux` (fm_backend_of_meta), and fm-spawn.sh does not write
@@ -56,13 +58,14 @@ FM_BACKEND_CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # bin/backends/<name>.sh and empirical verification, mirroring AGENTS.md
 # section 4's harness-verification discipline. herdr is EXPERIMENTAL (P2;
 # data/fm-backend-design-d7/herdr-addendum.md) - verified against the real
-# v0.7.2/protocol-16 binary (docs/herdr-backend.md) but newer than tmux's
-# long-proven default path. zellij is EXPERIMENTAL (P3;
+# v0.7.1/protocol-14 binary (data/fm-backend-design-d7/herdr-verification-p2.md)
+# but newer than tmux's long-proven default path. zellij is EXPERIMENTAL (P3;
 # data/fm-backend-design-d7/report.md "Zellij Backend") - verified against the
 # real 0.44.0 binary (docs/zellij-backend.md). orca is EXPERIMENTAL and
 # spawn-capable; unlike tmux/herdr/zellij it is also the worktree provider.
 # cmux is EXPERIMENTAL and spawn-capable, session-provider-only like
 # herdr/zellij - verified against the real 0.64.17 binary (docs/cmux-backend.md).
+# codex-app remains deliberately absent; see docs/codex-app-backend.md.
 FM_BACKEND_KNOWN="tmux herdr zellij orca cmux"
 FM_BACKEND_SPAWN="tmux herdr zellij orca cmux"
 
@@ -297,7 +300,7 @@ fm_backend_validate_spawn() {  # <name>
 fm_meta_get() {  # <meta-file> <key>
   local meta=$1 key=$2
   [ -f "$meta" ] || return 0
-  grep "^$key=" "$meta" 2>/dev/null | tail -1 | cut -d= -f2- || true
+  sed -n "s/^$key=//p" "$meta" 2>/dev/null | tail -1
 }
 
 # fm_backend_of_meta: the backend recorded in <meta-file>, defaulting to
@@ -332,14 +335,36 @@ fm_backend_meta_for_window() {  # <target> <state-dir>
   return 1
 }
 
-fm_backend_of_selector() {  # <raw-target> <resolved-target> <state-dir>
-  local raw=$1 resolved=$2 state=$3 meta
+fm_backend_task_id_for_selector() {  # <raw-target> <state-dir>
+  local raw=$1 state=$2 id
+  case "$raw" in
+    *:*) return 1 ;;
+  esac
+  if [ -f "$state/$raw.meta" ]; then
+    printf '%s' "$raw"
+    return 0
+  fi
   case "$raw" in
     fm-*)
-      meta="$state/${raw#fm-}.meta"
-      [ -f "$meta" ] && { fm_backend_of_meta "$meta"; return 0; }
+      id=${raw#fm-}
+      [ -f "$state/$id.meta" ] || return 1
+      printf '%s' "$id"
+      return 0
       ;;
   esac
+  return 1
+}
+
+fm_backend_meta_for_selector() {  # <raw-target> <state-dir>
+  local raw=$1 state=$2 id
+  id=$(fm_backend_task_id_for_selector "$raw" "$state") || return 1
+  printf '%s/%s.meta' "$state" "$id"
+}
+
+fm_backend_of_selector() {  # <raw-target> <resolved-target> <state-dir>
+  local raw=$1 resolved=$2 state=$3 meta
+  meta=$(fm_backend_meta_for_selector "$raw" "$state" 2>/dev/null || true)
+  [ -n "$meta" ] && { fm_backend_of_meta "$meta"; return 0; }
   if [ -n "$resolved" ]; then
     meta=$(fm_backend_meta_for_window "$resolved" "$state" 2>/dev/null || true)
     [ -n "$meta" ] && { fm_backend_of_meta "$meta"; return 0; }
@@ -348,13 +373,10 @@ fm_backend_of_selector() {  # <raw-target> <resolved-target> <state-dir>
 }
 
 fm_backend_expected_label_of_selector() {  # <raw-target> <state-dir>
-  local raw=$1 state=$2 meta
-  case "$raw" in
-    fm-*)
-      meta="$state/${raw#fm-}.meta"
-      [ -f "$meta" ] && printf '%s' "$raw"
-      ;;
-  esac
+  local raw=$1 state=$2 id
+  id=$(fm_backend_task_id_for_selector "$raw" "$state" 2>/dev/null || true)
+  [ -n "$id" ] && printf 'fm-%s' "$id"
+  return 0
 }
 
 # fm_backend_source: source the named backend's adapter file, once per shell.
@@ -400,19 +422,19 @@ fm_backend_source() {  # <name>
   esac
 }
 
-# fm_backend_resolve_selector: resolve a raw fm-peek.sh style selector to a
-# live session-provider target. fm-send.sh no longer calls this: it has its
-# own stricter fm_send_resolve_target that requires FM_HOME and refuses an
-# unresolved bare/ad hoc selector instead of falling back to a tmux window
-# search. Three forms, in order:
+# fm_backend_resolve_selector: resolve a raw fm-send.sh/fm-peek.sh style
+# selector to a live session-provider target. Four forms, in order:
 #   target with ":"   used as-is (the escape hatch for a window/pane outside
 #                      this firstmate home) - backend-independent, a literal string.
-#   "fm-<id>"          routed through <state-dir>/<id>.meta's backend target
+#   exact task id      routed through <state-dir>/<id>.meta's backend target
 #                      (`window=` normally, `terminal=` for Orca) -
 #                      backend-independent, a stored value, NOT re-verified
 #                      against a live backend inventory (matches today's
 #                      behavior: tmux window names can be trusted from meta
 #                      without a live re-check).
+#   "fm-<id>"          legacy task window label fallback routed through
+#                      <state-dir>/<id>.meta when no exact
+#                      <state-dir>/fm-<id>.meta exists.
 #   anything else      first matched against recorded `window=`/`terminal=`
 #                      metadata, then treated as an ad hoc bare window name and
 #                      resolved by searching the legacy tmux live inventory.
@@ -423,16 +445,18 @@ fm_backend_resolve_selector() {  # <raw-target> <state-dir>
       printf '%s' "$raw"
       return 0
       ;;
+  esac
+  meta=$(fm_backend_meta_for_selector "$raw" "$state" 2>/dev/null || true)
+  if [ -n "$meta" ]; then
+    window=$(fm_backend_target_of_meta "$meta")
+    [ -n "$window" ] || { echo "error: no backend target recorded in $meta" >&2; return 1; }
+    printf '%s' "$window"
+    return 0
+  fi
+  case "$raw" in
     fm-*)
-      meta="$state/${raw#fm-}.meta"
-      if [ ! -f "$meta" ]; then
-        echo "error: no metadata for $raw in $state; pass session:window to target a window outside this firstmate home" >&2
-        return 1
-      fi
-      window=$(fm_backend_target_of_meta "$meta")
-      [ -n "$window" ] || { echo "error: no backend target recorded in $meta" >&2; return 1; }
-      printf '%s' "$window"
-      return 0
+      echo "error: no metadata for $raw in $state; pass session:window to target a window outside this firstmate home" >&2
+      return 1
       ;;
     *)
       meta=$(fm_backend_meta_for_window "$raw" "$state" 2>/dev/null || true)
@@ -539,14 +563,13 @@ fm_backend_worktree_path() {  # <backend> <worktree-id>
   esac
 }
 
-# fm_backend_busy_state: semantic busy/idle/unknown when a backend exposes
-# positive busy evidence. Herdr uses native agent-state; tmux uses its existing
-# verified busy-footer detector, and accepts an optional pre-captured <tail40>
-# (forwarded verbatim through "$@") so a caller that already read the pane's
-# tail this poll cycle does not trigger a second capture-pane call. Callers own
-# the fallback policy: unknown is the cue for broader pane-hash / regex
-# corroboration where needed.
-fm_backend_busy_state() {  # <backend> <target> [tail40]
+# fm_backend_busy_state: semantic busy/idle/unknown for backends that expose
+# native agent-state or a backend-local positive busy detector. Backends with no
+# such primitive report unknown. Callers own the fallback policy: fm-watch.sh
+# uses unknown as the cue for its pane-hash + FM_BUSY_REGEX detection, while
+# fm-crew-state.sh also corroborates native idle verdicts before treating a
+# no-run crew as not busy.
+fm_backend_busy_state() {  # <backend> <target>
   local backend=$1
   shift
   fm_backend_source "$backend" || { printf 'unknown'; return 0; }
@@ -558,8 +581,8 @@ fm_backend_busy_state() {  # <backend> <target> [tail40]
 }
 
 # fm_backend_composer_state: classify the composer/input row of <target> as
-# empty|pending|unknown - the SUBMIT-side classifier each adapter already uses
-# internally to verify fm_backend_send_text_submit, exposed generically so a
+# empty|pending|unknown for callers that need a pre-submit pending-input guard
+# or an adapter's conservative submit fallback. It is exposed generically so a
 # caller other than the send path (the away-mode daemon's supervisor-pane
 # pending-input guard, bin/fm-supervise-daemon.sh) can ask the same question
 # without duplicating per-backend composer-reading logic. tmux and herdr both
@@ -630,5 +653,110 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
     *)
       return 1
       ;;
+  esac
+}
+
+# fm_backend_agent_alive: CONFIDENT liveness of a live harness-agent PROCESS
+# under <target>, distinct from fm_backend_target_exists's pane-PRESENCE-only
+# check above. A secondmate agent that has exited leaves its backend endpoint
+# alive as a bare shell; fm_backend_target_exists reports that shell as
+# "alive" because the pane itself still exists, which is exactly the gap
+# bin/fm-bootstrap.sh's session-start secondmate-liveness sweep exists to
+# close (AGENTS.md "Session start"). Prints one of:
+#   alive   - a real agent process is confirmed running.
+#   dead    - CONFIDENTLY not an agent: a bare shell (tmux) or a
+#             structurally-gone/no-agent-registered pane (herdr).
+#   unknown - anything ambiguous, unreadable, or unverified for this backend.
+# Scoped to today's --secondmate-spawn-capable backends with an empirically
+# verified classifier: tmux (docs/tmux-backend.md "Agent liveness probe") and
+# herdr (docs/herdr-backend.md "Agent liveness probe reuses the husk
+# classifier"). zellij, orca, and cmux report unknown until independently
+# verified - future work, not a functional gap for the two backends
+# --secondmate spawns actually support today plus tmux's reference path.
+# Callers must treat unknown exactly like an unreadable target: NEVER license
+# an action from it alone - the secondmate-liveness sweep gates a respawn on
+# `dead` only, precisely so a momentary read glitch can never duplicate a
+# live supervisor.
+fm_backend_agent_alive() {  # <backend> <target>
+  local backend=$1 target=$2
+  fm_backend_source "$backend" || { printf 'unknown'; return 0; }
+  case "$backend" in
+    tmux) fm_backend_tmux_agent_alive "$target" ;;
+    herdr) fm_backend_herdr_agent_alive "$target" ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+# --- native event push (backend-extensible) ---------------------------------
+#
+# The watcher's event-wait splice (bin/fm-watch.sh) is backend-agnostic: it asks
+# fm_backend_has_push whether a window's backend can push semantic state changes,
+# and for those backends replaces its blind `sleep POLL` with a bounded wait on
+# fm_backend_wait_transition. Every push-capable backend reuses the shared
+# normalized-transition shape and policy table (bin/fm-transition-lib.sh); today
+# only herdr implements the surface (docs/herdr-backend.md "Native
+# pane.agent_status_changed push escalation"). A backend with no native push
+# reports has-push false and returns 2 from the dispatchers below, so the
+# watcher falls back to its poll loop - the permanent fail-closed backstop.
+
+# fm_backend_has_push: 0 if <backend> exposes a native transition push stream.
+fm_backend_has_push() {  # <backend>
+  case "$1" in
+    herdr) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# fm_backend_events_capable: 0 if <backend>'s push path is usable for <session>
+# right now (version/schema/reader gate). Non-push backends are never capable.
+# The watcher memoizes this per session so the potentially heavy capability
+# probe is not repeated every poll.
+fm_backend_events_capable() {  # <backend> <session>
+  local backend=$1
+  shift
+  fm_backend_has_push "$backend" || return 1
+  fm_backend_source "$backend" || return 1
+  case "$backend" in
+    herdr) fm_backend_herdr_events_capable "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
+# fm_backend_wait_transition: bounded wait for a fresh actionable (blocked)
+# transition on one of <pane_window...> in <session>, up to <timeout_secs>.
+# Prints the normalized transition record and returns 0 on a fresh actionable
+# edge; returns 1 on a clean timeout (the caller has effectively already slept);
+# returns 2 when the event path is unusable (the caller sleeps the budget
+# itself). Non-push backends always return 2.
+fm_backend_wait_transition() {  # <backend> <session> <timeout_secs> <state_dir> <pane_window...>
+  local backend=$1
+  shift
+  fm_backend_has_push "$backend" || return 2
+  fm_backend_source "$backend" || return 2
+  case "$backend" in
+    herdr) fm_backend_herdr_wait_transition "$@" ;;
+    *) return 2 ;;
+  esac
+}
+
+fm_backend_commit_transition() {  # <backend> <state_dir> <session> <record>
+  local backend=$1
+  shift
+  fm_backend_has_push "$backend" || return 1
+  fm_backend_source "$backend" || return 1
+  case "$backend" in
+    herdr) fm_backend_herdr_commit_transition "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
+fm_backend_clear_transition() {  # <backend> <state_dir> <window>
+  local backend=$1
+  shift
+  fm_backend_has_push "$backend" || return 0
+  fm_backend_source "$backend" || return 1
+  case "$backend" in
+    herdr) fm_backend_herdr_clear_transition "$@" ;;
+    *) return 0 ;;
   esac
 }
