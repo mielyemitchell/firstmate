@@ -294,7 +294,7 @@ log_mentions_run_id() {
   local run_id note
   run_id=$(strip_quotes "$(nm_field id)")
   [ -n "$run_id" ] || return 1
-  note=$(log_note_of "$LOG_LINE")
+  note=$(status_line_note "$LOG_LINE")
   case "$note" in
     *"$run_id"*) return 0 ;;
     *) return 1 ;;

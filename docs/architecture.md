@@ -44,7 +44,7 @@ A pull-based guard (`bin/fm-guard.sh`) warns through supervision tool output if 
 The drain script calls that guard after emptying the queue, which avoids repeating the queued-wakes warning for records it just consumed while still warning on stale watcher liveness.
 It leads with prominent bordered banners for the tangle and no-watcher cases so they cannot be skimmed past.
 On every verified primary harness, tracked hook integration gives the primary session a push-based backstop: when work is in flight and no identity-matched watcher lock with a fresh beacon is live, direct Stop hooks block and passive turn-end hooks force one bounded follow-up.
-The guard is scoped out of secondmate homes and crewmate/scout worktrees, is loop-safe per harness, and is documented in [turnend-guard.md](turnend-guard.md).
+The guard covers the main primary and genuinely marked secondmate homes, exempts child crewmate/scout worktrees, is loop-safe per harness, and is documented in [turnend-guard.md](turnend-guard.md).
 
 A presence-gated sub-supervisor (`bin/fm-supervise-daemon.sh`) extends this for walk-away supervision: the `/afk` skill starts it through the tracked foreground helper `bin/fm-afk-start.sh`, after which the watcher reverts to daemon-managed one-shot mode and the daemon self-handles routine wakes in bash.
 The watcher and daemon share `bin/fm-classify-lib.sh` for captain-relevant status verbs, declared-external-wait vocabulary, and status-scan primitives.
@@ -117,6 +117,14 @@ Two read-mostly tools guard against firstmate's own tracked state drifting from 
 Its default mode is a dry run that writes nothing; `--clean <id> --yes` re-verifies the endpoint is dead, the work is landed, and the fleet is not frozen, then removes only that one id's volatile state files and `tasktmp`, never worktrees, homes, clones, branches, or backend endpoints.
 
 `bin/fm-usage-tripwire.sh` is a read-only watcher check born from a token-burn incident: it scans transcript files under `FM_USAGE_CLAUDE_DIR`/`FM_USAGE_CODEX_DIR` whose mtime falls in a sliding `FM_USAGE_WINDOW_MINUTES` window, counts them as a session-burst signal against `FM_USAGE_SESSION_THRESHOLD`, and separately sums each transcript line's own timestamped output tokens against `FM_USAGE_OUTPUT_THRESHOLD` so a long-lived, actively-appended session is not re-summed in full on every poll. It prints exactly one alarm line on a breach and nothing when healthy, matching the `state/<id>.check.sh` watcher-check contract; arm it with `ln -sf "$(pwd -P)/bin/fm-usage-tripwire.sh" state/usage-tripwire.check.sh`.
+
+## No-mistakes gate authority boundary
+
+Firstmate's own no-mistakes gate runs agents inside a checkout that also contains the fleet-captain identity in `AGENTS.md`, so gate execution needs an authority boundary separate from ordinary crewmate worktree isolation.
+The tracked `.no-mistakes.yaml` sets `disable_project_settings: true`; no-mistakes honors that setting only from the trusted default-branch copy, so a pushed branch cannot enable its own project instructions during validation.
+Independently, `fm-spawn.sh`, `fm-send.sh`, and `fm-teardown.sh` source `bin/fm-gate-refuse-lib.sh` and exit with status 3 before fleet mutation when the gate environment marker is present or the current checkout matches the default no-mistakes gate-repository topology.
+A normal primary checkout or crewmate worktree has neither signal and remains unaffected.
+The helper's header owns the exact signal detection, relocated-home limitation, test-harness bypass, and relationship to no-mistakes' HEAD-continuity guard.
 
 ## Two task shapes
 
@@ -192,9 +200,9 @@ Pending mentions are stored as `state/x-inbox/<request_id>.json`; the `fmx-respo
 When a reply has a real visual artifact, `--image <path>` attaches one local PNG, JPEG, GIF, WebP, BMP, or TIFF to the relay's optional `{media_type,data_base64}` image object.
 Actionable reversible requests run through firstmate's normal intake, backlog, dispatch, investigation, or ship lifecycle.
 Work that completes in the answering turn gets one outcome reply.
-Work that spawns a longer-running task gets an acknowledgement reply first; `bin/fm-x-link.sh` records `x_request=`, `x_request_ts=`, `x_followups=0`, and optional reply-platform context in that task's `state/<id>.meta`, while the `fmx-respond` skill links before inbox cleanup and the helper can recover context with a best-effort request-id relay lookup that warns when it remains unknown.
+Work that spawns a longer-running task gets an acknowledgement reply first; `bin/fm-x-link.sh` records `x_request=`, `x_request_ts=`, `x_followups=0`, and optional reply-platform context in that task's `state/<id>.meta`, while durable per-request context preserves the original platform and budget independently of task links and inbox cleanup.
 Later milestone and completion wakes use `bin/fm-x-followup.sh` to post up to three public-safe follow-ups through the relay's `connector/followup` endpoint, ending with a `--final` one that always clears the link.
-The [X mode configuration reference](configuration.md#x-mode-env) owns the exact platform-resolution fallback and warning contract.
+The [X mode configuration reference](configuration.md#x-mode-env) owns the exact context retention, platform-resolution, and fail-safe posting contract.
 If recovery relinks the same relay request onto a successor task, `fm-x-link.sh --carry-count <n> --carry-ts <epoch> --carry-platform <x|discord> --carry-max <n>` preserves the consumed follow-up count, original 7-day window, and reply split budget instead of granting a fresh local budget or falling back to the wrong platform.
 The follow-up helper forwards `--image <path>` to the same reply client when a follow-up needs an image.
 Each follow-up is bounded by a local 7-day window and a 3-post cap; a successful non-final post increments the counter and keeps the link, while `--final`, reaching the cap, the window lapsing, or the relay itself rejecting an exhausted binding all clear it, and the helper is skipped for tasks that did not originate from an X-mode mention.
