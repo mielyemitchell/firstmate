@@ -3,6 +3,7 @@
 The first mate drives these; interactive entrypoints work by hand too, while `*-lib.sh` files are sourced helpers.
 Each row is one purpose clause only: the script's own header comment is the authoritative description of its behavior, flags, and contracts, so read the header before first use.
 If you have changed away from the firstmate home in an interactive shell, invoke these scripts by absolute path through the repo's `bin/` directory; the scripts self-locate internally after they start.
+The shared no-mistakes gate refusal used by `fm-spawn.sh`, `fm-send.sh`, and `fm-teardown.sh` is summarized in [architecture.md](architecture.md#no-mistakes-gate-authority-boundary); `fm-gate-refuse-lib.sh`'s header owns its exact contract.
 
 | Script                           | Purpose                                                                                                                                                     |
 | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -16,6 +17,7 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `fm-bearings-snapshot.sh`        | Project the fleet snapshot to the compact TOON bearings view; local-only unless `--include-prs`                                                             |
 | `fm-update.sh`                   | Fast-forward-only self-update of firstmate and secondmate homes from origin                                                                                 |
 | `fm-backlog-handoff.sh`          | Validate and delegate queued backlog-item moves into a secondmate home                                                                                      |
+| `fm-decision-hold.sh`            | Create, verify, complete, and resolve durable captain-held decisions                                                                                        |
 | `fm-brief.sh`                    | Scaffold ship, scout, secondmate-charter, and Herdr-lab briefs                                                                                              |
 | `fm-herdr-lab.sh`                | Provision and guardedly operate an isolated, never-default Herdr lab session                                                                                |
 | `fm-ensure-agents-md.sh`         | Ensure a project's real `AGENTS.md`, its `CLAUDE.md` symlink, and the canonical self-governance section                                                     |
@@ -42,17 +44,18 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `backends/orca.sh`               | Experimental Orca backend adapter owning both worktree and terminal                                                                                         |
 | `backends/cmux.sh`               | Experimental cmux session-provider adapter                                                                                                                  |
 | `backends/herdr-eventwait.py`    | Raw AF_UNIX wire-transport subscriber for herdr's native pane status-change stream                                                                          |
-| `fm-config-push.sh`              | Push declared inheritable local config to live secondmate homes mid-session                                                                                 |
+| `fm-config-push.sh`              | Push declared inherited local material to live secondmate homes mid-session                                                                                 |
 | `fm-project-mode.sh`             | Resolve a project's delivery mode and `+yolo` flag from `data/projects.md`                                                                                  |
 | `fm-merge-local.sh`              | Fast-forward a `local-only` project's local default branch after approval                                                                                   |
 | `fm-review-diff.sh`              | Review a crewmate branch or recorded PR head against the authoritative base                                                                                 |
-| `fm-marker-lib.sh`               | Shared from-firstmate request marker and detector                                                                                                           |
-| `fm-gate-refuse-lib.sh`          | Shared no-mistakes gate-context refusal for fleet lifecycle entrypoints                                                                                      |
+| `fm-marker-lib.sh`               | Shared from-firstmate request marker, detector, and idempotent transformation                                                                               |
+| `fm-gate-refuse-lib.sh`          | Shared no-mistakes gate-context refusal for fleet lifecycle entrypoints                                                                                     |
 | `fm-watch-arm.sh`                | Verified home-scoped watcher arm wrapper with honest status reporting                                                                                       |
 | `fm-watch-checkpoint.sh`         | Run one bounded foreground watcher checkpoint for Codex-style supervision                                                                                   |
 | `fm-watch.sh`                    | Singleton-safe always-on watcher: absorb benign wakes, queue and exit on actionable ones                                                                    |
 | `fm-afk-start.sh`                | Run the common sourceable away-mode daemon entry in the foreground                                                                                          |
 | `fm-afk-launch.sh`               | Own away-mode entry, exit, rollback, and any backend terminal lifecycle                                                                                     |
+| `fm-afk-return.sh`               | Own deterministic return shutdown, catch-up evidence, and the firstmate-actionable blocker gate                                                             |
 | `fm-supervisor-target-lib.sh`    | Resolve the shared supervisor target and backend for the daemon and launcher                                                                                |
 | `fm-supervise-daemon.sh`         | Presence-gated away-mode sub-supervisor: self-handle routine wakes, escalate batched digests, alert on failed delivery                                      |
 | `fm-crew-state.sh`               | Print one deterministic current-state line for a crew                                                                                                       |
@@ -62,7 +65,7 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `fm-ff-lib.sh`                   | Shared guarded fast-forward helper for origin pulls and local secondmate syncs                                                                              |
 | `fm-lock-lib.sh`                 | Shared "is this git lock provably abandoned?" proof used by teardown and fleet-sync                                                                         |
 | `fm-home-guard-lib.sh`           | Shared FM_HOME ownership guard sourced by every mutating entrypoint                                                                                         |
-| `fm-config-inherit-lib.sh`       | Shared primary-to-secondmate inheritable-config propagation                                                                                                 |
+| `fm-config-inherit-lib.sh`       | Shared primary-to-secondmate inherited local-material propagation                                                                                           |
 | `fm-tasks-axi-lib.sh`            | Shared backlog-backend selector and `tasks-axi` compatibility probe                                                                                         |
 | `fm-tasks-axi.sh`                | Run tasks-axi against the effective FM_HOME regardless of caller cwd                                                                                        |
 | `fm-wake-drain.sh`               | Atomically drain queued watcher wakes, then assert watcher liveness                                                                                         |
@@ -72,14 +75,19 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `fm-ack-lib.sh`                  | Shared --expect-ack pending-acknowledgement tracking and ack-missed escalation helpers                                                                      |
 | `fm-tmux-lib.sh`                 | Shared tmux pane primitives for busy detection, composer capture, and verified submit                                                                       |
 | `fm-peek.sh`                     | Print a bounded tail of a crewmate endpoint                                                                                                                 |
-| `fm-pr-check.sh`                 | Record `pr=` and `pr_head=` for a PR-ready task, then arm the watcher's merge poll                                                                          |
-| `fm-pr-merge.sh`                 | Record PR metadata, then merge a task's PR from its full GitHub URL                                                                                         |
+| `fm-check-register.sh`           | Bind an intentional custom watcher check to its current bytes                                                                                               |
+| `fm-check-lib.sh`                | Validate custom-check registrations and prepare private execution snapshots                                                                                 |
+| `fm-pr-lib.sh`                   | Own canonical task and PR validation plus private atomic PR-poll and provenance publication                                                                 |
+| `fm-pr-poll.sh`                  | Provide the byte-static watcher program for validated PR-poll sidecars                                                                                      |
+| `fm-pr-check-migrate.sh`         | Quarantine older task polls without execution and rebuild only canonical polls                                                                              |
+| `fm-pr-check.sh`                 | Record validated `pr=` and `pr_head=` values, then atomically arm a static merge poll                                                                       |
+| `fm-pr-merge.sh`                 | Record PR metadata, then merge a task's canonical full GitHub URL                                                                                           |
 | `fm-promote.sh`                  | Promote a scout task in place to a protected ship task                                                                                                      |
 | `fm-fleet-map.sh`                | Read-only diagnostic reconciling tracked state against the live Herdr surface                                                                               |
 | `fm-fleet-map-lib.sh`            | Shared tracked-state/live-endpoint reconciliation helpers for fm-fleet-map.sh and fm-reconcile-stale.sh                                                     |
 | `fm-landed-work-lib.sh`          | Shared, more-conservative landed-work assessor sourced by fm-reconcile-stale.sh                                                                             |
 | `fm-reconcile-stale.sh`          | Dry-run-first reporter, then guarded --clean, for tracked state with no live backend endpoint                                                               |
-| `fm-teardown.sh`                 | Fail-closed teardown: return landed ship worktrees, require scout reports, retire secondmate homes                                                          |
+| `fm-teardown.sh`                 | Fail-closed teardown: return landed ship worktrees, require completed scout deliverables, retire secondmate homes                                           |
 | `fm-harness.sh`                  | Detect the running harness and resolve crew or secondmate harness, model, and effort                                                                        |
 | `fm-lock.sh`                     | Per-home firstmate session lock                                                                                                                             |
 | `fm-x-lib.sh`                    | Shared X-mode config, relay, and reply-threading helpers                                                                                                    |

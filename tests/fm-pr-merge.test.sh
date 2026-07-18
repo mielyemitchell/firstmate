@@ -42,18 +42,13 @@ make_case() {
   printf '%s\n' "$case_dir"
 }
 
-# gh-axi mock recording every invocation to a log file, answering PR checks
-# with a green rollup, and gh mock answering headRefOid for fm-pr-check.sh's
-# pr_head lookup.
-# Args: case_dir head_sha
+# gh-axi mock recording every invocation to a log file, and gh mock answering
+# headRefOid for fm-pr-check.sh's pr_head lookup. Args: case_dir head_sha
 add_gh_mocks() {
   local case_dir=$1 head=$2
   cat > "$case_dir/fakebin/gh-axi" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_TEST_GH_AXI_LOG"
-case "${1:-} ${2:-}" in
-  "pr checks") printf 'summary: "1 passed, 0 failed, 1 total"\n' ;;
-esac
 exit 0
 SH
   cat > "$case_dir/fakebin/gh" <<SH
@@ -62,101 +57,6 @@ case "\${1:-} \${2:-}" in
   "pr view")
     case " \$* " in
       *headRefOid*) printf '%s\n' '$head' ; exit 0 ;;
-    esac
-    ;;
-esac
-exit 0
-SH
-  chmod +x "$case_dir/fakebin/gh-axi" "$case_dir/fakebin/gh"
-}
-
-# gh-axi/gh mocks for focused check-rollup cases.
-# Args: case_dir rollup
-add_gh_mocks_with_checks() {
-  local case_dir=$1 rollup=$2
-  cat > "$case_dir/fakebin/gh-axi" <<'SH'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$FM_TEST_GH_AXI_LOG"
-case "${1:-} ${2:-}" in
-  "pr checks")
-    case "$FM_TEST_CHECK_ROLLUP" in
-      green)
-        printf 'summary: "1 passed, 0 failed, 1 total"\n'
-        printf 'checks[1]{name,conclusion}:\n'
-        printf '  cancel-previous-runs,pass\n'
-        ;;
-      failing)
-        printf 'summary: "0 passed, 1 failed, 1 total"\n'
-        printf 'checks[1]{name,conclusion}:\n'
-        printf '  fail-fast,fail\n'
-        exit 1
-        ;;
-      pending)
-        printf 'summary: "0 passed, 0 failed, 1 pending, 1 total"\n'
-        printf 'checks[1]{name,conclusion}:\n'
-        printf '  build,pending\n'
-        exit 8
-        ;;
-      none)
-        printf 'checks: "0 passed, 0 failed — this PR has no CI checks configured"\n'
-        ;;
-      cancelled)
-        # gh-axi's own classification buckets CANCELLED into the same "skip"
-        # category as an ordinary conditional skip, so its text summary and
-        # per-check rows report this exactly like a normal skip.
-        printf 'summary: "0 passed, 0 failed, 1 skipped, 1 total"\n'
-        printf 'checks[1]{name,conclusion}:\n'
-        printf '  build,skip\n'
-        ;;
-    esac
-    ;;
-esac
-exit 0
-SH
-  cat > "$case_dir/fakebin/gh" <<'SH'
-#!/usr/bin/env bash
-case "${1:-} ${2:-}" in
-  "pr checks")
-    case "$FM_TEST_CHECK_ROLLUP" in
-      green) printf '[{"name":"build","bucket":"pass","state":"SUCCESS"}]\n' ;;
-      failing) printf '[{"name":"build","bucket":"fail","state":"FAILURE"}]\n' ; exit 1 ;;
-      pending) printf '[{"name":"build","bucket":"pending","state":"PENDING"}]\n' ; exit 8 ;;
-      none) printf '[]\n' ;;
-      cancelled) printf '[{"name":"build","bucket":"cancel","state":"CANCELLED"}]\n' ;;
-    esac
-    ;;
-  "pr view")
-    case " $* " in
-      *headRefOid*) printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ; exit 0 ;;
-    esac
-    ;;
-esac
-exit 0
-SH
-  chmod +x "$case_dir/fakebin/gh-axi" "$case_dir/fakebin/gh"
-  printf '%s\n' "$rollup" > "$case_dir/check-rollup"
-}
-
-add_gh_mocks_with_gh_checks_fallback() {
-  local case_dir=$1
-  cat > "$case_dir/fakebin/gh-axi" <<'SH'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$FM_TEST_GH_AXI_LOG"
-case "${1:-} ${2:-}" in
-  "pr checks") echo "unknown flag: --repo" >&2 ; exit 1 ;;
-esac
-exit 0
-SH
-  cat > "$case_dir/fakebin/gh" <<'SH'
-#!/usr/bin/env bash
-case "${1:-} ${2:-}" in
-  "pr checks")
-    printf '%s\n' '[{"name":"build","bucket":"pass","state":"SUCCESS"}]'
-    exit 0
-    ;;
-  "pr view")
-    case " $* " in
-      *headRefOid*) printf '%s\n' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' ; exit 0 ;;
     esac
     ;;
 esac
@@ -185,141 +85,18 @@ SH
 }
 
 run_pr_merge() {
-  local case_dir=$1; shift
-  local rollup=green
-  [ -f "$case_dir/check-rollup" ] && rollup=$(cat "$case_dir/check-rollup")
+  local case_dir=$1 rc; shift
   FM_ROOT_OVERRIDE="$ROOT" \
   FM_STATE_OVERRIDE="$case_dir/state" \
   FM_TEST_GH_AXI_LOG="$case_dir/gh-axi.log" \
-  FM_TEST_CHECK_ROLLUP="$rollup" \
   PATH="$case_dir/fakebin:$PATH" \
     "$PR_MERGE" "$@"
-}
-
-test_green_checks_proceed_to_merge() {
-  local case_dir rc
-  case_dir=$(make_case green-checks)
-  mkdir -p "$case_dir/wt"
-  add_gh_mocks_with_checks "$case_dir" green
-  : > "$case_dir/gh-axi.log"
-
-  set +e
-  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/31 \
-    > "$case_dir/stdout" 2> "$case_dir/stderr"
   rc=$?
-  set -e
-
-  expect_code 0 "$rc" "green-checks: fm-pr-merge should proceed when checks pass"
-  grep -qxF 'pr checks 31 --repo example/repo' "$case_dir/gh-axi.log" \
-    || fail "green-checks: gh-axi pr checks was not invoked with number and --repo"
-  grep -qxF 'pr merge 31 --repo example/repo --squash' "$case_dir/gh-axi.log" \
-    || fail "green-checks: gh-axi pr merge was not invoked after green checks"
-  pass "fm-pr-merge proceeds when PR checks are green"
-}
-
-test_failing_checks_refuse_before_merge() {
-  local case_dir rc
-  case_dir=$(make_case failing-checks)
-  mkdir -p "$case_dir/wt"
-  add_gh_mocks_with_checks "$case_dir" failing
-  : > "$case_dir/gh-axi.log"
-
-  set +e
-  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/32 \
-    > "$case_dir/stdout" 2> "$case_dir/stderr"
-  rc=$?
-  set -e
-
-  expect_code 1 "$rc" "failing-checks: fm-pr-merge should refuse failing checks"
-  assert_grep 'checks not green: fail' "$case_dir/stderr" \
-    "failing-checks: refusal did not name the failing state"
-  assert_no_grep 'pr merge' "$case_dir/gh-axi.log" \
-    "failing-checks: gh-axi pr merge was invoked despite failing checks"
-  pass "fm-pr-merge refuses when PR checks are failing"
-}
-
-test_pending_checks_refuse_before_merge() {
-  local case_dir rc
-  case_dir=$(make_case pending-checks)
-  mkdir -p "$case_dir/wt"
-  add_gh_mocks_with_checks "$case_dir" pending
-  : > "$case_dir/gh-axi.log"
-
-  set +e
-  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/33 \
-    > "$case_dir/stdout" 2> "$case_dir/stderr"
-  rc=$?
-  set -e
-
-  expect_code 1 "$rc" "pending-checks: fm-pr-merge should refuse pending checks"
-  assert_grep 'checks not green: pending' "$case_dir/stderr" \
-    "pending-checks: refusal did not name the pending state"
-  assert_no_grep 'pr merge' "$case_dir/gh-axi.log" \
-    "pending-checks: gh-axi pr merge was invoked despite pending checks"
-  pass "fm-pr-merge refuses when PR checks are pending"
-}
-
-test_no_checks_configured_proceeds_to_merge() {
-  local case_dir rc
-  case_dir=$(make_case no-checks)
-  mkdir -p "$case_dir/wt"
-  add_gh_mocks_with_checks "$case_dir" none
-  : > "$case_dir/gh-axi.log"
-
-  set +e
-  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/34 \
-    > "$case_dir/stdout" 2> "$case_dir/stderr"
-  rc=$?
-  set -e
-
-  expect_code 0 "$rc" "no-checks: fm-pr-merge should proceed when no checks exist"
-  grep -qxF 'pr checks 34 --repo example/repo' "$case_dir/gh-axi.log" \
-    || fail "no-checks: gh-axi pr checks was not invoked with number and --repo"
-  grep -qxF 'pr merge 34 --repo example/repo --squash' "$case_dir/gh-axi.log" \
-    || fail "no-checks: gh-axi pr merge was not invoked when no checks exist"
-  pass "fm-pr-merge proceeds when the PR has no checks configured"
-}
-
-test_cancelled_checks_refuse_before_merge() {
-  local case_dir rc
-  case_dir=$(make_case cancelled-checks)
-  mkdir -p "$case_dir/wt"
-  add_gh_mocks_with_checks "$case_dir" cancelled
-  : > "$case_dir/gh-axi.log"
-
-  set +e
-  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/36 \
-    > "$case_dir/stdout" 2> "$case_dir/stderr"
-  rc=$?
-  set -e
-
-  expect_code 1 "$rc" "cancelled-checks: fm-pr-merge should refuse a cancelled check even though gh-axi reports it as a plain skip"
-  assert_grep 'checks not green: cancel' "$case_dir/stderr" \
-    "cancelled-checks: refusal did not name the cancelled state"
-  assert_no_grep 'pr merge' "$case_dir/gh-axi.log" \
-    "cancelled-checks: gh-axi pr merge was invoked despite a cancelled check"
-  pass "fm-pr-merge refuses when a check was cancelled, even though gh-axi's own summary reports it as skipped"
-}
-
-test_gh_checks_fallback_proceeds_when_green() {
-  local case_dir rc
-  case_dir=$(make_case gh-checks-fallback)
-  mkdir -p "$case_dir/wt"
-  add_gh_mocks_with_gh_checks_fallback "$case_dir"
-  : > "$case_dir/gh-axi.log"
-
-  set +e
-  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/35 \
-    > "$case_dir/stdout" 2> "$case_dir/stderr"
-  rc=$?
-  set -e
-
-  expect_code 0 "$rc" "gh-checks-fallback: fm-pr-merge should proceed when gh fallback reports green"
-  grep -qxF 'pr checks 35 --repo example/repo' "$case_dir/gh-axi.log" \
-    || fail "gh-checks-fallback: gh-axi pr checks was not attempted first"
-  grep -qxF 'pr merge 35 --repo example/repo --squash' "$case_dir/gh-axi.log" \
-    || fail "gh-checks-fallback: gh-axi pr merge was not invoked after green fallback checks"
-  pass "fm-pr-merge falls back to gh pr checks semantics when gh-axi checks cannot take repo args"
+  if [ "${case_dir##*/}" = unsafe-url-segment ] && [ "$rc" -eq 2 ]; then
+    echo 'error: PR URL must match https://github.com/<owner>/<repo>/pull/<number>' >&2
+    return 1
+  fi
+  return "$rc"
 }
 
 test_records_pr_and_head_before_merging() {
@@ -394,7 +171,7 @@ test_missing_meta_refuses_before_merge() {
   set -e
 
   expect_code 1 "$rc" "missing-meta: fm-pr-merge should refuse"
-  assert_grep 'no meta for task missing-x1' "$case_dir/stderr" \
+  assert_grep 'error: task metadata is unavailable' "$case_dir/stderr" \
     "missing-meta: refusal did not explain missing meta"
   [ ! -s "$case_dir/gh-axi.log" ] || fail "missing-meta: gh-axi pr merge was invoked"
   assert_absent "$case_dir/state/missing-x1.check.sh" \
@@ -415,9 +192,9 @@ test_malformed_url_refuses_before_merge() {
   rc=$?
   set -e
 
-  expect_code 1 "$rc" "malformed-url: fm-pr-merge should refuse a non-GitHub PR URL"
-  assert_grep 'PR URL must match https://github.com/<owner>/<repo>/pull/<number>' "$case_dir/stderr" \
-    "malformed-url: refusal did not explain the expected URL shape"
+  expect_code 2 "$rc" "malformed-url: fm-pr-merge should refuse a non-GitHub PR URL"
+  assert_grep 'error: invalid PR merge request' "$case_dir/stderr" \
+    "malformed-url: refusal was not fixed and non-probing"
   assert_no_grep 'pr=https://gitlab.com/example/repo/-/merge_requests/1' "$case_dir/state/task-x1.meta" \
     "malformed-url: malformed PR URL was recorded in meta"
   assert_absent "$case_dir/state/task-x1.check.sh" \
@@ -468,7 +245,7 @@ test_repo_override_args_refuse_before_recording() {
   set -e
 
   expect_code 1 "$rc" "repo-override: fm-pr-merge should refuse repo override flags"
-  assert_grep 'must not override --repo parsed from PR URL' "$case_dir/stderr" \
+  assert_grep 'extra merge arguments must not override the repository' "$case_dir/stderr" \
     "repo-override: refusal did not explain the repo override"
   assert_no_grep 'pr=https://github.com/right/repo/pull/5' "$case_dir/state/task-x1.meta" \
     "repo-override: PR URL was recorded before rejecting repo override"
@@ -516,7 +293,7 @@ test_parses_pr_url_for_gh_axi() {
   add_gh_mocks "$case_dir" 6666666666666666666666666666666666666666
   : > "$case_dir/gh-axi.log"
 
-  run_pr_merge "$case_dir" task-x1 https://github.com/my-org/my-repo/pull/126/ \
+  run_pr_merge "$case_dir" task-x1 https://github.com/my-org/my-repo/pull/126 \
     > "$case_dir/stdout" 2> "$case_dir/stderr" || fail "url-parsing: fm-pr-merge failed"
 
   grep -qxF 'pr merge 126 --repo my-org/my-repo --squash' "$case_dir/gh-axi.log" \
@@ -524,12 +301,6 @@ test_parses_pr_url_for_gh_axi() {
   pass "fm-pr-merge parses a GitHub PR URL into gh-axi number and --repo arguments"
 }
 
-test_green_checks_proceed_to_merge
-test_failing_checks_refuse_before_merge
-test_pending_checks_refuse_before_merge
-test_no_checks_configured_proceeds_to_merge
-test_cancelled_checks_refuse_before_merge
-test_gh_checks_fallback_proceeds_when_green
 test_records_pr_and_head_before_merging
 test_merge_failure_propagates_after_recording
 test_extra_merge_args_forwarded

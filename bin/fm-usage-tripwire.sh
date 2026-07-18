@@ -9,6 +9,9 @@
 # Watcher arming:
 # - Copy or symlink this script to a standing check path such as `state/usage-tripwire.check.sh`.
 # - Example: `ln -sf "$(pwd -P)/bin/fm-usage-tripwire.sh" state/usage-tripwire.check.sh`.
+# - Then bind it to its current bytes: `bin/fm-check-register.sh usage-tripwire`. The watcher rejects any
+#   `state/<id>.check.sh` without a matching hash-registered `state/<id>.check-trust`, so re-run the register
+#   step after ever replacing the linked/copied file.
 # - The watcher contract is strict: print one alarm line only when firstmate should wake, print nothing when healthy, and finish before `FM_CHECK_TIMEOUT`.
 #
 # Window and thresholds:

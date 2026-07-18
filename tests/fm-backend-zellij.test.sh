@@ -86,6 +86,28 @@ zellij_assert_call_order() {
   [ "$before_line" -lt "$after_line" ] || fail "$msg"
 }
 
+add_compatible_tasks_axi_fake() {
+  local fb=$1
+  cat > "$fb/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --version)
+    printf '%s\n' '0.2.2'
+    ;;
+  update)
+    [ "${2:-}" = --help ] && printf '%s\n' 'usage: tasks-axi update <id> [flags]' '  --archive-body'
+    ;;
+  mv)
+    [ "${2:-}" = --help ] && printf '%s\n' 'usage: tasks-axi mv <id> [<id>...] --to <path-or-dir>'
+    ;;
+  hold)
+    [ "${2:-}" = --help ] && printf '%s\n' 'usage: tasks-axi hold <id> --reason <reason> --kind captain'
+    ;;
+esac
+SH
+  chmod +x "$fb/tasks-axi"
+}
+
 # zellij_multi_tab_response: a list-tabs --json canned response holding
 # several tabs at once (tab_id/name pairs), for ambiguity/foreign-tag tests.
 zellij_multi_tab_response() {  # <dir> <n> <tab1> <name1> [<tab2> <name2> ...]
@@ -800,10 +822,13 @@ test_teardown_passes_recorded_tab_id_to_zellij_kill() {
     "zellij_tab_id=3" \
     "worktree=$dir/missing-worktree" \
     "project=$project" \
-    "kind=scout"
+    "kind=scout" \
+    "decisions_reviewed=1" \
+    "decision_keys="
   printf '[]\n' > "$dir/responses/1.out"
   printf '[{"tab_id":3,"name":"fm-zghost"}]\n' > "$dir/responses/2.out"
   fb=$(make_zellij_fakebin "$dir")
+  add_compatible_tasks_axi_fake "$fb"
   out=$( PATH="$fb:$PATH" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" FM_ZELLIJ_SESSION_LIST="firstmate" \
     "$ROOT/bin/fm-teardown.sh" zghost 2>&1 )
