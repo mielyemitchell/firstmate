@@ -99,6 +99,7 @@ state/               volatile runtime signals; gitignored
   x-outbox/          generated X-mode dry-run reply and dismiss previews; inspect it when FMX_DRY_RUN is set (section 14)
   x-poll.error       generated X-mode relay diagnostic dedupe marker
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
+  .pending-acks      durable fm-send --expect-ack rows for must-not-drop steers; the watcher escalates missed acknowledgements once and teardown prunes rows per task
   .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
   .fleet-freeze      durable fleet-freeze flag; present = fm-spawn.sh, fm-send.sh, fm-watch.sh, fm-watch-arm.sh, and the supervise daemon refuse fleet movement
   .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
@@ -242,6 +243,7 @@ After spawning, confirm the worker is processing the brief, handle any trust dia
 A persistent secondmate is recorded in the secondmate registry and runtime state, never as a backlog work item.
 
 Steer a worker with short single-line messages through fail-closed `fm-send`; put long instructions in a file.
+For a captain dispatch or other must-not-drop steer, use `fm-send --expect-ack <minutes>` so the watcher escalates if the target does not acknowledge with a status event.
 A secondmate's routed reply returns through status or a document pointer, not by firstmate peeking into its chat.
 Supervise all live work under section 8.
 
@@ -327,8 +329,9 @@ Handle actionable wakes as follows:
 
 1. For `signal:`, read the listed event lines first, then reconcile current state only where action depends on it.
 2. For `stale:`, inspect the recorded endpoint and load `stuck-crewmate-recovery` for a stopped, looping, confused, or unresponsive worker; a deep-inspection reason also requires current-state and validation-log inspection.
-3. For `check:`, act on the named poll result, including merges and X-mode events.
-4. For `heartbeat:`, review the whole fleet from the structured fleet view, reconcile suspicious tasks and PR state, update the backlog, and never report an unchanged fleet as progress.
+3. For `ack-missed:`, treat the steer as possibly dropped; peek or read current state, then steer or recover the target before assuming it saw the instruction.
+4. For `check:`, act on the named poll result, including merges and X-mode events.
+5. For `heartbeat:`, review the whole fleet from the structured fleet view, reconcile suspicious tasks and PR state, update the backlog, and never report an unchanged fleet as progress.
 
 When any wake reports a merged PR for a project cloned in this home, refresh that clone through the guarded fleet-sync path.
 When X-linked work reaches a milestone or terminal state, load `fmx-respond`; before terminal teardown, always post the final completion follow-up so the link clears even if earlier follow-ups were spent.
