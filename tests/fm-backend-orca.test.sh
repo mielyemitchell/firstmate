@@ -75,6 +75,28 @@ SH
   chmod +x "$fb/tmux"
 }
 
+add_compatible_tasks_axi_fake() {
+  local fb=$1
+  cat > "$fb/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --version)
+    printf '%s\n' '0.2.2'
+    ;;
+  update)
+    [ "${2:-}" = --help ] && printf '%s\n' 'usage: tasks-axi update <id> [flags]' '  --archive-body'
+    ;;
+  mv)
+    [ "${2:-}" = --help ] && printf '%s\n' 'usage: tasks-axi mv <id> [<id>...] --to <path-or-dir>'
+    ;;
+  hold)
+    [ "${2:-}" = --help ] && printf '%s\n' 'usage: tasks-axi hold <id> --reason <reason> --kind captain'
+    ;;
+esac
+SH
+  chmod +x "$fb/tasks-axi"
+}
+
 test_capture_reads_terminal_tail_json() {
   local out
   orca_case capture-tail
@@ -531,7 +553,7 @@ test_spawn_refuses_orca_secondmate_before_home_mutation() {
   assert_contains "$out" "backend=orca does not support --secondmate spawns yet" \
     "orca secondmate refusal should happen at backend selection"
   assert_absent "$subhome/config/crew-harness" \
-    "orca secondmate refusal should not propagate inheritable config into the secondmate home"
+    "orca secondmate refusal should not propagate inherited local material into the secondmate home"
   pass "fm-spawn.sh --backend orca --secondmate: refuses before secondmate-home mutation"
 }
 
@@ -788,8 +810,10 @@ test_scout_teardown_removes_orca_worktree_via_helper() {
   fm_write_meta "$state/$id.meta" \
     "window=fm-$id" "terminal=term-teardown" "worktree=$wt" "project=$proj" \
     "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off" \
-    "backend=orca" "orca_worktree_id=wt-teardown"
+    "backend=orca" "orca_worktree_id=wt-teardown" \
+    "decisions_reviewed=1" "decision_keys="
   orca_case teardown
+  add_compatible_tasks_axi_fake "$FB"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-teardown","path":"%s"}}}\n' "$wt" > "$RESP/1.out"
   neutral=$(neutral_fm_root "$CASE_DIR/neutral")
   set +e
@@ -824,8 +848,10 @@ test_scout_teardown_refuses_orca_id_path_mismatch() {
   fm_write_meta "$state/$id.meta" \
     "window=fm-$id" "terminal=term-scout-mismatch" "worktree=$wt" "project=$proj" \
     "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off" \
-    "backend=orca" "orca_worktree_id=wt-scout-mismatch"
+    "backend=orca" "orca_worktree_id=wt-scout-mismatch" \
+    "decisions_reviewed=1" "decision_keys="
   orca_case scout-mismatch
+  add_compatible_tasks_axi_fake "$FB"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-scout-mismatch","path":"%s"}}}\n' "$other_wt" > "$RESP/1.out"
   neutral=$(neutral_fm_root "$CASE_DIR/neutral")
   set +e
@@ -859,8 +885,10 @@ test_teardown_removes_orca_worktree_when_path_missing() {
   fm_write_meta "$state/$id.meta" \
     "window=fm-$id" "terminal=term-missing-path" "worktree=$wt" "project=$proj" \
     "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off" \
-    "backend=orca" "orca_worktree_id=wt-missing-path"
+    "backend=orca" "orca_worktree_id=wt-missing-path" \
+	    "decisions_reviewed=1" "decision_keys="
   orca_case missing-path
+  add_compatible_tasks_axi_fake "$FB"
   neutral=$(neutral_fm_root "$CASE_DIR/neutral")
   set +e
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
@@ -891,9 +919,11 @@ test_teardown_preserves_metadata_when_orca_remove_error_json() {
   fm_write_meta "$state/$id.meta" \
     "window=fm-$id" "worktree=$wt" "project=$proj" \
     "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off" \
-    "backend=orca" "orca_worktree_id=wt-remove-error"
+    "backend=orca" "orca_worktree_id=wt-remove-error" \
+    "decisions_reviewed=1" "decision_keys="
   orca_case remove-error-teardown
   printf '{"ok":false,"error":{"code":"worktree_not_removed","message":"worktree not removed"}}\n' > "$RESP/1.out"
+  add_compatible_tasks_axi_fake "$FB"
   neutral=$(neutral_fm_root "$CASE_DIR/neutral")
   set +e
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
@@ -1092,7 +1122,8 @@ test_teardown_refuses_orca_missing_worktree_id() {
   touch "$state/.last-watcher-beat"
   fm_write_meta "$state/$id.meta" \
     "window=fm-$id" "terminal=term-missing-id" "worktree=$wt" "project=$proj" \
-    "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off" "backend=orca"
+    "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off" "backend=orca" \
+    "decisions_reviewed=1" "decision_keys="
   orca_case missing-id
   neutral=$(neutral_fm_root "$CASE_DIR/neutral")
   set +e
@@ -1123,8 +1154,10 @@ test_teardown_removes_orca_worktree_without_terminal_handle() {
   fm_write_meta "$state/$id.meta" \
     "window=fm-$id" "worktree=$wt" "project=$proj" \
     "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off" \
-    "backend=orca" "orca_worktree_id=wt-no-terminal"
+    "backend=orca" "orca_worktree_id=wt-no-terminal" \
+    "decisions_reviewed=1" "decision_keys="
   orca_case no-terminal
+  add_compatible_tasks_axi_fake "$FB"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-no-terminal","path":"%s"}}}\n' "$wt" > "$RESP/1.out"
   neutral=$(neutral_fm_root "$CASE_DIR/neutral")
   set +e
