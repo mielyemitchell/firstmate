@@ -106,6 +106,29 @@ Only a named non-default branch checked out in `FM_ROOT` is a worktree tangle.
 If another live session holds the fleet lock, both surfaces keep the alarm but switch to read-only wording with no repair command.
 Ship briefs also tell the crewmate to verify `pwd -P` and `git rev-parse --show-toplevel` before creating `fm/<id>`, then stop with a blocked status if it landed in the primary checkout.
 
+## FM_HOME ownership guard
+
+`bin/fm-home-guard-lib.sh` closes a narrower gap: a shell whose cwd is inside a seeded secondmate home (marked by `.fm-secondmate-home`) but whose `FM_HOME` still points elsewhere.
+`fm-lock.sh`, `fm-spawn.sh`, `fm-supervise-daemon.sh`, `fm-tasks-axi.sh`, and `fm-wake-drain.sh` source it and call `fm_home_guard mutate <command-name>` before mutating; `fm-watch-arm.sh` calls it too, ahead of arming a watcher.
+When the context home (the secondmate home the shell is actually sitting in) and the effective `FM_HOME` disagree, a mutating call refuses with the mismatch and remediation, while a read-only call warns and continues.
+Primary homes are unaffected because they carry no `.fm-secondmate-home` marker.
+`fm-send.sh` is a separate, fail-closed case rather than a `fm_home_guard` caller: it refuses outright whenever `FM_HOME` is unset, so it never has a context-vs-effective-home mismatch to guard against.
+`fm-watch.sh` does not source this guard.
+
+## Fleet freeze, stale-state reconciliation, and the usage tripwire
+
+`bin/fm-freeze.sh on [reason...]` writes local `state/.fleet-freeze`; while it exists, `fm-spawn.sh`, `fm-send.sh`, `fm-watch.sh`, `fm-watch-arm.sh`, and the away-mode daemon's injection path all refuse through the shared `fm-freeze-lib.sh` guard before doing anything else, so the fleet is parked without tearing anything down.
+It is a blunt incident pause: it does not inspect, steer, or tear down any crewmate itself.
+`fm-freeze.sh off` lifts it, `fm-freeze.sh status` reports it, and `FM_FLEET_FREEZE_BYPASS=1` bypasses it for one deliberate command.
+The session-start digest surfaces an active freeze as its own subsection and steers the next-step reminder toward orchestration/diagnosis mode instead of a normal watcher arm; `bin/fm-guard.sh` reports the same frozen watcher-down state as an expected pause rather than a supervision lapse, and the daemon defers its own watcher restart attempts on a fixed interval while frozen instead of counting them as crashes.
+
+Two read-mostly tools guard against firstmate's own tracked state drifting from what is actually live.
+`bin/fm-fleet-map.sh` is a read-only diagnostic: it matches every tracked `state/*.meta` record against visible Herdr agents (or other backends' endpoint liveness) by exact target then by cwd, and reports `stale-tracked` records and `operator-untracked-herdr` agents; it never mutates anything.
+`bin/fm-reconcile-stale.sh` builds on that same matching (`fm-fleet-map-lib.sh`) plus a landed-work assessor (`fm-landed-work-lib.sh`) with carve-outs for `kind=secondmate` and `kind=scout` that mirror `fm-teardown.sh`. The assessor itself is deliberately more conservative than `fm-teardown.sh` and omits its PR-head patch-id containment fallback, so use `bin/fm-teardown.sh` directly for a squash-merge case it would recognize as landed but this assessor reports as unlanded or blocked.
+Its default mode is a dry run that writes nothing; `--clean <id> --yes` re-verifies the endpoint is dead, the work is landed, and the fleet is not frozen, then removes only that one id's volatile state files and `tasktmp`, never worktrees, homes, clones, branches, or backend endpoints.
+
+`bin/fm-usage-tripwire.sh` is a read-only watcher check born from a token-burn incident: it scans transcript files under `FM_USAGE_CLAUDE_DIR`/`FM_USAGE_CODEX_DIR` whose mtime falls in a sliding `FM_USAGE_WINDOW_MINUTES` window, counts them as a session-burst signal against `FM_USAGE_SESSION_THRESHOLD`, and separately sums each transcript line's own timestamped output tokens against `FM_USAGE_OUTPUT_THRESHOLD` so a long-lived, actively-appended session is not re-summed in full on every poll. It prints exactly one alarm line on a breach and nothing when healthy, matching the `state/<id>.check.sh` watcher-check contract; arm it and bind it to the watcher's hash-registered check trust per its own header (`bin/fm-usage-tripwire.sh`).
+
 ## No-mistakes gate authority boundary
 
 Firstmate's own no-mistakes gate runs agents inside a checkout that also contains the fleet-captain identity in `AGENTS.md`, so gate execution needs an authority boundary separate from ordinary crewmate worktree isolation.
