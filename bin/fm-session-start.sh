@@ -936,6 +936,12 @@ load /afk and ensure the daemon is running, because the daemon owns watcher
 supervision.
 
 EOF
+elif [ "$FREEZE_PRESENT" -eq 1 ]; then
+  cat <<'EOF'
+Fleet freeze is active. Stay in orchestration/diagnosis mode unless the captain
+explicitly unfreezes or approves a one-command bypass.
+
+EOF
 elif [ -f "$CONFIG/x-mode.env" ]; then
   cat <<EOF
 Follow the supervision operating instructions block above for harness '$PRIMARY_HARNESS'.

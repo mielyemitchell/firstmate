@@ -219,11 +219,12 @@ The mutating fleet entrypoints source it and fail closed before changing the for
 
 `bin/fm-freeze.sh on [reason...]` writes local `state/.fleet-freeze`; while it exists, spawn, send, watcher, watch-arm, and away-mode injection paths refuse fleet movement through `fm-freeze-lib.sh`.
 `fm-freeze.sh off` lifts the park, `fm-freeze.sh status` reports it, and `FM_FLEET_FREEZE_BYPASS=1` permits one deliberate command.
+It is a blunt incident pause: it does not inspect, steer, or tear down any crewmate itself.
 
 `bin/fm-fleet-map.sh` is a read-only diagnostic that compares tracked task records with live endpoints without mutating either side.
-`bin/fm-reconcile-stale.sh` uses the same matching plus `fm-landed-work-lib.sh` to clean only a requested task whose endpoint is dead and whose work is proven landed; secondmates remain blocked and scouts still require their report.
+`bin/fm-reconcile-stale.sh` uses the same matching plus `fm-landed-work-lib.sh` to clean only a requested task whose endpoint is dead and whose work is proven landed; secondmates remain blocked and scouts still require their report. Its default mode is a dry run that writes nothing; `--clean <id> --yes` re-verifies the endpoint is dead, the work is landed, and the fleet is not frozen before removing only that one id's volatile state.
 
-`bin/fm-usage-tripwire.sh` is a read-only watcher check for abnormal transcript-session and output-token bursts within a sliding time window.
+`bin/fm-usage-tripwire.sh` is a read-only watcher check, born from a token-burn incident, for abnormal transcript-session and output-token bursts within a sliding time window: it scans transcript files under `FM_USAGE_CLAUDE_DIR`/`FM_USAGE_CODEX_DIR` whose mtime falls within `FM_USAGE_WINDOW_MINUTES`, counts them against `FM_USAGE_SESSION_THRESHOLD`, and sums each transcript's own timestamped output tokens against `FM_USAGE_OUTPUT_THRESHOLD`.
 It prints one alarm line on a breach and stays silent when healthy, matching the authenticated custom-check contract documented in its header.
 
 ## No-mistakes gate authority boundary
@@ -354,14 +355,14 @@ For preview testing, `FMX_DRY_RUN` makes `fm-x-reply.sh` and `fm-x-dismiss.sh` s
 Attached images are recorded as compact `{media_type, bytes, source_path}` metadata in dry-run instead of base64 bytes.
 Relay remains layered on top of the existing check mechanism without changing its request-handling behavior.
 
-A promised *final* public reply is a stronger commitment than a milestone follow-up, because forgetting it is publicly visible.
+A promised _final_ public reply is a stronger commitment than a milestone follow-up, because forgetting it is publicly visible.
 It is therefore not carried in conversation memory at all: intake turns it into a typed `kind=public-followup` obligation owned by `tasks-axi public-followup`, and every later step reads that obligation from disk.
 The mechanism boundary is deliberately narrow.
 `tasks-axi` owns the obligation state machine and is the only thing that validates a terminal result's source home, work id, generation, schema, outcome, and deliverables.
 `state/x-context/` remains the only owner of the private full request context.
 `bin/fm-x-reply.sh` remains the only thing that posts.
 `bin/fm-public-followup.sh` composes those three and adds the activation gate, a private terminal-event inbox, the idempotent delivery sequence, and retained-loop disposition: delivery stamps the registration delivered, `rechain` hands its thread binding to one follow-on obligation, and `retire` is the only close.
-Work routed to another home reports a *typed* terminal result through `bin/fm-public-followup-emit.sh`; firstmate never recovers the source home, work id, outcome, or deliverables by parsing a free-form `done:` sentence, and the child never learns the thread.
+Work routed to another home reports a _typed_ terminal result through `bin/fm-public-followup-emit.sh`; firstmate never recovers the source home, work id, outcome, or deliverables by parsing a free-form `done:` sentence, and the child never learns the thread.
 When that home is a remote secondmate, no local path reaches the owning home, so the result is staged where the work runs and the owning home pulls it over the same SSH route with `bin/fm-public-followup-collect.sh`.
 Because a terminal event's id is derived from its identity tuple rather than generated, duplicate reports and restart replay converge without coordination.
 Reconciliation rides the existing relay poll and the session-start digest instead of a new watcher, daemon, or timer, and both are gated on the same `.env` activation contract so a home that never opted into the relay executes none of it.
