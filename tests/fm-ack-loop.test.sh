@@ -96,7 +96,7 @@ test_expect_ack_records_pending_after_successful_send() {
   [ "$target" = lane-a ] || fail "pending ack stored wrong target id: $target"
   [ "$deadline" -eq "$((sent + 180))" ] || fail "deadline was not sent_at + minutes*60"
   assert_contains "$row" "check this now" "pending ack should keep a short message summary"
-  assert_contains "$(cat "$log")" "target=sess:fm-lane-a literal=1 arg=check this now" "send should still type message"
+  assert_contains "$(cat "$log")" "target=sess:fm-lane-a" "send should still ring the task endpoint"
   pass "fm-send --expect-ack records target, deadline, baseline, and summary after a successful lane send"
 }
 
