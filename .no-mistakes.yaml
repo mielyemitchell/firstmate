@@ -19,13 +19,39 @@ disable_project_settings: true
 # them. commands.lint delegates to bin/fm-lint.sh, the single owner of the lint
 # definition that .github/workflows/ci.yml also invokes, so local can never
 # diverge from CI again (parity asserted by tests/fm-lint.test.sh).
-# The test command mirrors the Linux behavior job in .github/workflows/ci.yml:
-# iterate every tests/*.test.sh, run each, and fail the step if any one exits
-# non-zero (an agent-driven test step has crashed the daemon). The e2e tests need
-# tmux on PATH, which the firstmate environment provides.
+#
+# commands.test is TRUSTED: no-mistakes honors this file only from the
+# default-branch copy, so a pushed branch under validation cannot change what
+# command runs against it - including a branch that adds new tests. Before
+# 2026-09-07 this ran the raw `for t in tests/*.test.sh` loop, so an
+# upstream-sync branch carrying upstream's new real-herdr-gated test family
+# ran those tests for real against the shared live Herdr server and destroyed
+# three live workspaces. The command below is two-phase so it stays safe both
+# before and after that sync merge lands `bin/fm-test-run.sh`: once that
+# script exists it takes over and matches upstream's own trusted command
+# (`bin/fm-test-run.sh --changed --exclude-family real-herdr-gated` - see
+# upstream's `.no-mistakes.yaml` for the rationale); until then, the legacy
+# loop runs but skips any test file that declares itself part of the
+# real-herdr-gated or live-harness-optin family, so the legacy path can never
+# start a live Herdr session either.
 commands:
   lint: 'bin/fm-lint.sh'
-  test: 'command -v tmux >/dev/null || { echo "tmux is required for e2e tests" >&2; exit 1; }; tmux -V; rc=0; for t in tests/*.test.sh; do echo "== $t =="; bash "$t" || rc=1; done; exit "$rc"'
+  test: |
+    if [ -x bin/fm-test-run.sh ]; then
+      exec bin/fm-test-run.sh --changed --exclude-family real-herdr-gated
+    fi
+    command -v tmux >/dev/null || { echo "tmux is required for e2e tests" >&2; exit 1; }
+    tmux -V
+    rc=0
+    for t in tests/*.test.sh; do
+      if grep -Eq 'real-herdr-gated|live-harness-optin' "$t" 2>/dev/null; then
+        echo "== skip $t (live-harness family) =="
+        continue
+      fi
+      echo "== $t =="
+      bash "$t" || rc=1
+    done
+    exit "$rc"
 
 # Keep test evidence out of this repo; it stays in a temp dir instead.
 test:
