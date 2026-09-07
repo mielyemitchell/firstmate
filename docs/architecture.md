@@ -217,7 +217,7 @@ Ship briefs also tell the crewmate to verify `pwd -P` and `git rev-parse --show-
 `bin/fm-home-guard-lib.sh` prevents a shell running inside a seeded secondmate home from mutating a foreign `FM_HOME`.
 The mutating fleet entrypoints source it and fail closed before changing the foreign home, while read-only lock status remains available for the secondmate's own home.
 
-`bin/fm-freeze.sh on [reason...]` writes local `state/.fleet-freeze`; while it exists, spawn, send, watcher, watch-arm, and away-mode injection paths refuse fleet movement through `fm-freeze-lib.sh`.
+`bin/fm-freeze.sh on [reason...]` writes local `state/.fleet-freeze`; while it exists, spawn, send, watcher, watch-arm, the supervise daemon's own startup, and away-mode injection paths refuse fleet movement through `fm-freeze-lib.sh`.
 `fm-freeze.sh off` lifts the park, `fm-freeze.sh status` reports it, and `FM_FLEET_FREEZE_BYPASS=1` permits one deliberate command.
 It is a blunt incident pause: it does not inspect, steer, or tear down any crewmate itself.
 
