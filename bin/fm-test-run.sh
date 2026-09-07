@@ -1272,6 +1272,7 @@ families_for_changed_path() {
       printf '%s\n' live-harness-optin
       ;;
     bin/fm-sessionstart-run.sh|.claude/settings.json|.codex/hooks.json|\
+    .grok/hooks/fm-primary-sessionstart-nudge.json|\
     .pi/extensions/fm-primary-turnend-guard.ts)
       # The run tier's two harness-supplied facts (source vocabulary and
       # context-reset stdout injection) only show up against a real harness.
@@ -1378,7 +1379,8 @@ families_for_changed_path() {
     docs/configuration.md|docs/supervision-protocols/*)
       printf '%s\n' pure-contract-unit
       ;;
-    tests/lib.sh|tests/*-helpers.sh|tests/fixtures.sh)
+    tests/lib.sh|tests/*-helpers.sh|tests/fixtures.sh|tests/remote-herdr-fixture.sh|\
+    tests/assets/*)
       families_for_test_reference "$(basename "$path")" \
         || printf '%s\n' "__unmapped__:$path"
       ;;
@@ -1406,7 +1408,8 @@ families_for_changed_path() {
     tests/*)
       printf '%s\n' "__unmapped__:$path"
       ;;
-    README.md|LICENSE|assets/*|docs/*|.gitignore)
+    README.md|LICENSE|VISION.md|GROK_BOT.md|assets/*|docs/*|.gitignore|\
+    .greptile/*|skills/*)
       ;;
     *)
       families_for_test_reference "$path" \
