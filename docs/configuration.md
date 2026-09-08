@@ -109,8 +109,8 @@ See [`wedge-alarm.md`](wedge-alarm.md) for the channel reference and macOS verif
 
 The tracked `.no-mistakes.yaml` keeps test evidence outside the repo and defines `commands.test` so no-mistakes runs firstmate's bash behavior suite directly.
 That evidence policy is specific to the firstmate repo: target projects may legitimately commit `.no-mistakes/evidence/` from their own no-mistakes pipeline, but firstmate keeps `.no-mistakes/` local and CI rejects tracked entries under that path.
-That command requires `tmux` on `PATH`, prints `tmux -V`, runs every `tests/*.test.sh` with `bash`, and fails if any script exits non-zero.
-It intentionally mirrors the behavior-test baseline in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) instead of delegating the test step to an agent.
+`commands.test` is TRUSTED (no-mistakes honors it only from the default-branch copy, so a pushed branch under validation cannot override it) and is two-phase: if `bin/fm-test-run.sh` is executable it delegates to it with upstream's `--changed --exclude-family real-herdr-gated` flags; otherwise it falls back to the legacy loop over `tests/*.test.sh` (requiring `tmux` on `PATH`) but skips any test file that greps as declaring membership in the `real-herdr-gated` or `live-harness-optin` family, so the legacy path can never start a live Herdr session against the shared server either.
+That fallback still mirrors the behavior-test baseline in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) instead of delegating the test step to an agent, minus the live-Herdr-family skip.
 
 ## Captain Preferences (data/captain.md / data/captain-shared.md)
 
@@ -201,13 +201,21 @@ This section is the single owner of the canonical schema and its per-field seman
     {
       "when": "<natural-language condition describing a kind of task>",
       "use": [
-        { "harness": "<adapter>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max, optional>" }
+        {
+          "harness": "<adapter>",
+          "model": "<optional model>",
+          "effort": "<low|medium|high|xhigh|max, optional>"
+        }
       ],
       "select": "<optional strategy>",
       "why": "<optional rationale that helps firstmate choose>"
     }
   ],
-  "default": { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>" }
+  "default": {
+    "harness": "<adapter>",
+    "model": "<optional model>",
+    "effort": "<optional effort>"
+  }
 }
 ```
 
