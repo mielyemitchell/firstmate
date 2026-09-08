@@ -34,9 +34,16 @@ disable_project_settings: true
 # loop runs but skips any test file that declares itself part of the
 # real-herdr-gated or live-harness-optin family, so the legacy path can never
 # start a live Herdr session either.
+# The shared no-mistakes daemon runs as a launchd user agent, which defaults to a
+# 256 open-file soft limit on macOS, too low for bin/fm-test-run.sh's parallel
+# runner. The ulimit line below raises this process's own soft limit toward its
+# hard limit before either phase runs; it is best-effort only and never fails
+# the step (raising the daemon's launchd-imposed limit itself needs admin rights
+# and is out of scope here).
 commands:
   lint: 'bin/fm-lint.sh'
   test: |
+    ulimit -n 10240 2>/dev/null || ulimit -n 4096 2>/dev/null || true
     if [ -x bin/fm-test-run.sh ]; then
       exec bin/fm-test-run.sh --changed --exclude-family real-herdr-gated
     fi
