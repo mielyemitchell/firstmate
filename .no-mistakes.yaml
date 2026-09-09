@@ -9,53 +9,58 @@
 # HEAD-continuity guard; see docs/architecture.md "No-mistakes gate authority boundary."
 disable_project_settings: true
 
-# Trusted documentation placement policy for the Document step.
-# The audience inventory and coding guideline own the detail; keep this as a
-# pointer so gate instructions cannot become a second prose policy.
-document:
-  instructions: |
-    Read docs/documentation-audiences.md and its machine-consumed
-    docs/documentation-audiences.json inventory before changing documentation.
-    Apply the knowledge-placement policy in
-    .agents/skills/firstmate-coding-guidelines/SKILL.md.
-    For changed prose, verify audience, authoritative owner, current relevance,
-    evidence destination, and unique safety facts, then review the complete
-    branch diff again after every documentation or lint fix.
-
-# Pin lint to the same owner CI invokes instead of leaving it to no-mistakes'
-# default handling, which does not invoke the repository's canonical lint gate.
-# `bin/fm-lint.sh` owns the context-sensitive ShellCheck modes and GitHub
-# workflow lint via pinned actionlint in `bin/fm-lint-workflows.sh`.
-# Invocation wiring is asserted by `tests/fm-lint.test.sh` and
-# `tests/fm-lint-workflows.test.sh`.
+# Pin lint and the portable behavior suite to the same deterministic commands
+# the Linux CI jobs run, instead of leaving them to no-mistakes' default handling.
+# CI separately owns platform-specific compatibility lanes, including the stock
+# macOS Bash snapshot checks. Without a configured
+# commands.lint, the gate's lint step never ran the deterministic
+# `shellcheck bin/*.sh bin/backends/*.sh tests/*.sh` that CI runs, so info-level
+# ShellCheck findings (e.g. SC2015) were not surfaced locally before CI rejected
+# them. commands.lint delegates to bin/fm-lint.sh, the single owner of the lint
+# definition that .github/workflows/ci.yml also invokes, so local can never
+# diverge from CI again (parity asserted by tests/fm-lint.test.sh).
 #
-# Pin the test baseline to the repository's own runner rather than leaving each
-# gate agent to chain `bash tests/a.test.sh && bash tests/b.test.sh` by hand.
-# `bin/fm-test-run.sh --changed` selects only the families the branch's changed
-# files map to, runs concurrency-admitted scripts with bounded concurrency, keeps
-# every unproven stateful script serial, and applies its own generous per-script
-# bound - so a verification round is neither a guessed short timeout nor a
-# serial chain. `bin/fm-test-run.sh` owns all of that (see its header).
-#
-# real-herdr-gated is excluded for the same reason the portable CI lanes exclude
-# it: those scripts drive a live Herdr lab, and the dedicated required Herdr lane
-# in .github/workflows/ci.yml owns that coverage. A gate baseline must not start
-# real Herdr sessions on whatever machine it happens to run on.
-#
-# This is still NOT a complete tests/*.test.sh walk, and must not become one.
-# Local no-mistakes Test is intent-targeted validation of whether the change
-# meets its brief; .github/workflows/ci.yml owns broad regression (behavior
-# suite, platform, security, Herdr, tmux, and lifecycle coverage). A full-suite
-# override here would duplicate CI and defeat the targeted Test contract. The
-# configured command is a baseline only: because firstmate always supplies
-# --intent, the Test step still runs its intent-targeted evidence agent on top
-# of it.
+# commands.test is TRUSTED: no-mistakes honors this file only from the
+# default-branch copy, so a pushed branch under validation cannot change what
+# command runs against it - including a branch that adds new tests. Before
+# 2026-09-07 this ran the raw `for t in tests/*.test.sh` loop, so an
+# upstream-sync branch carrying upstream's new real-herdr-gated test family
+# ran those tests for real against the shared live Herdr server and destroyed
+# three live workspaces. The command below is two-phase so it stays safe both
+# before and after that sync merge lands `bin/fm-test-run.sh`: once that
+# script exists it takes over and matches upstream's own trusted command
+# (`bin/fm-test-run.sh --changed --exclude-family real-herdr-gated` - see
+# upstream's `.no-mistakes.yaml` for the rationale); until then, the legacy
+# loop runs but skips any test file that declares itself part of the
+# real-herdr-gated or live-harness-optin family, so the legacy path can never
+# start a live Herdr session either.
+# The shared no-mistakes daemon runs as a launchd user agent, which defaults to a
+# 256 open-file soft limit on macOS, too low for bin/fm-test-run.sh's parallel
+# runner. The ulimit line below raises this process's own soft limit toward its
+# hard limit before either phase runs; it is best-effort only and never fails
+# the step (raising the daemon's launchd-imposed limit itself needs admin rights
+# and is out of scope here).
 commands:
   lint: 'bin/fm-lint.sh'
-  test: 'bin/fm-test-run.sh --changed --exclude-family real-herdr-gated'
+  test: |
+    ulimit -n 10240 2>/dev/null || ulimit -n 4096 2>/dev/null || true
+    if [ -x bin/fm-test-run.sh ]; then
+      exec bin/fm-test-run.sh --changed --exclude-family real-herdr-gated
+    fi
+    command -v tmux >/dev/null || { echo "tmux is required for e2e tests" >&2; exit 1; }
+    tmux -V
+    rc=0
+    for t in tests/*.test.sh; do
+      if grep -Eq 'real-herdr-gated|live-harness-optin' "$t" 2>/dev/null; then
+        echo "== skip $t (live-harness family) =="
+        continue
+      fi
+      echo "== $t =="
+      bash "$t" || rc=1
+    done
+    exit "$rc"
 
-# Publish each run's test evidence to the orphan no-mistakes/evidence branch linked from the PR.
-# The evidence is not committed to the feature or default branch.
+# Keep test evidence out of this repo; it stays in a temp dir instead.
 test:
   evidence:
-    store_in_repo: true
+    store_in_repo: false
