@@ -202,8 +202,8 @@ The flag is a home-local supervision-noise preference and is not inherited by se
 
 ## Gate defaults (.no-mistakes.yaml)
 
-The tracked `.no-mistakes.yaml` keeps test evidence outside the repo, pins `commands.lint` to `bin/fm-lint.sh`, the same owner CI invokes, and defines a trusted two-phase `commands.test` baseline for firstmate's behavior suite.
-That evidence policy is specific to the firstmate repo: target projects may legitimately commit `.no-mistakes/evidence/` from their own no-mistakes pipeline, but firstmate keeps `.no-mistakes/` local and CI rejects tracked entries under that path.
+The tracked `.no-mistakes.yaml` sets `test.evidence.store_in_repo: true`, pins `commands.lint` to `bin/fm-lint.sh`, the same owner CI invokes, and defines a trusted two-phase `commands.test` baseline for firstmate's behavior suite.
+Storing evidence in the repo publishes each run's test artifacts to the orphan `no-mistakes/evidence` branch and links them from the PR body, instead of keeping them on local disk under the no-mistakes home; that branch shares no history with code branches, so evidence never enters a pushed feature branch or the default branch, and the worktree's `.no-mistakes/` stays local while CI rejects tracked entries under that path.
 No-mistakes honors executable `commands.test` only from the default-branch copy, so a pushed branch under validation cannot override it.
 The command first raises its own open-file soft limit best-effort with `ulimit -n 10240`, falling back to `4096` and never failing the step, because the shared launchd daemon otherwise inherits a soft limit too low for the parallel runner.
 If `bin/fm-test-run.sh` is executable, the command delegates to `bin/fm-test-run.sh --changed --exclude-family real-herdr-gated`.
@@ -356,13 +356,21 @@ This section is the single owner of the canonical schema and its per-field seman
     {
       "when": "<natural-language condition describing a kind of task>",
       "use": [
-        { "harness": "<adapter>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max, optional>" }
+        {
+          "harness": "<adapter>",
+          "model": "<optional model>",
+          "effort": "<low|medium|high|xhigh|max, optional>"
+        }
       ],
       "why": "<optional rationale that helps firstmate choose>"
     }
   ],
   "default": [
-    { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>" }
+    {
+      "harness": "<adapter>",
+      "model": "<optional model>",
+      "effort": "<optional effort>"
+    }
   ]
 }
 ```
@@ -449,9 +457,13 @@ This section is the single owner of the canonical schema.
     {
       "name": "<label used in the report>",
       "command": "<optional bare executable name to find on PATH>",
-      "version_args": ["<optional args that make it print its version, default --version>"],
+      "version_args": [
+        "<optional args that make it print its version, default --version>"
+      ],
       "announce_pattern": "<optional extended regex matching the tool's own update announcement>",
-      "announce_args": ["<optional args for the command that carries that announcement, default version_args>"],
+      "announce_args": [
+        "<optional args for the command that carries that announcement, default version_args>"
+      ],
       "git": {
         "repo": "<optional absolute path to a local clone>",
         "remote": "<optional remote name, default origin>",
@@ -681,7 +693,7 @@ Never run the registered blocking source command directly in a conversational tu
 
 ## Process-to-event sources (state/procevent)
 
-A long-polling external process is registered as a *source* through its adapter, whose header and `--help` own the commands and flags.
+A long-polling external process is registered as a _source_ through its adapter, whose header and `--help` own the commands and flags.
 `bin/fm-procevent.sh` owns the generic contract; built-in adapters retain their tracked `bin/fm-procevent-<adapter>.sh` commands, while an explicitly bound external adapter routes through the trusted host contract above.
 `bin/fm-procevent-lavish.sh` is the first built-in adapter and wraps only the currently published `lavish-axi poll` interface.
 That adapter, and only that adapter, retries the one exact transient response a cut-short listener returns while its marks remain available (`error: Lavish Editor poll response was interrupted` with `code: SERVER_ERROR`), up to 12 times at 5 second intervals, so an internal retry never reaches the runner as a captured result.
@@ -765,25 +777,25 @@ The published `lavish-axi poll` clears feedback destructively before returning i
 Never describe this path as at-least-once, no-loss, or lossless.
 `docs/verification/process-event-sources.md` holds the measurements and `.agents/skills/process-event-sources/SKILL.md` owns the handling procedure.
 
-## Spoken interface and captain inbox (config/voice-*, config/inbox-*)
+## Spoken interface and captain inbox (config/voice-_, config/inbox-_)
 
 The spoken interface in [`docs/voice-relay.md`](voice-relay.md) and the model-backed subcommands of `bin/fm-inbox.sh` reach a paid API in a named account, so no region, model id or AWS profile is shipped as a tracked default.
 Each is one line in a local, gitignored `config/` file, with an environment variable that overrides it for a single run, and a missing required value refuses with the path to write rather than falling back to a value that belongs to another home.
 That configuration is the whole opt-in: an unconfigured home cannot start the relay and cannot run `fm-inbox.sh say` or `ask`, while `note`, `status`, `list` and `drain` need no configuration at all because they make no model call.
 The voice handover depends on `note`, so it keeps working in a home that has configured nothing.
 
-| File | Environment | Holds |
-| --- | --- | --- |
-| `config/voice-region` | `FM_VOICE_REGION` | Bedrock region for the relay's bidirectional session, required by `bin/fm-voice-relay.py`. |
-| `config/voice-model` | `FM_VOICE_MODEL` | Speech-to-speech model id, required by `bin/fm-voice-relay.py`. |
-| `config/voice-profile` | `FM_VOICE_PROFILE` | AWS profile the relay exports credentials from; absent, or an explicitly empty variable, means it uses only credentials already in its environment. |
-| `config/voice-id` | `FM_VOICE_ID` | Output voice id, optional, `matthew` when unset. |
-| `config/voice-read-scope` | none | `counts` (the default, and what an absent file means) or `full`; see [`docs/voice-relay.md`](voice-relay.md) for what each scope may say. |
-| `config/voice-read-deny` | none | One plain case-insensitive substring per line; a matching open item is withheld from every list and reduced to a count. |
-| `config/inbox-region` | `FM_INBOX_REGION` | AWS region for `fm-inbox.sh say` and `ask`. |
-| `config/inbox-stt-model` | `FM_INBOX_STT_MODEL` | Speech-to-text model id, required by `fm-inbox.sh say`. |
-| `config/inbox-ask-model` | `FM_INBOX_ASK_MODEL` | Side-question model id, required by `fm-inbox.sh ask`. |
-| `config/inbox-profile` | `FM_INBOX_PROFILE` | AWS profile for those two calls; absent, or an explicitly empty variable, means whatever credentials are already in the environment. |
+| File                      | Environment          | Holds                                                                                                                                               |
+| ------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config/voice-region`     | `FM_VOICE_REGION`    | Bedrock region for the relay's bidirectional session, required by `bin/fm-voice-relay.py`.                                                          |
+| `config/voice-model`      | `FM_VOICE_MODEL`     | Speech-to-speech model id, required by `bin/fm-voice-relay.py`.                                                                                     |
+| `config/voice-profile`    | `FM_VOICE_PROFILE`   | AWS profile the relay exports credentials from; absent, or an explicitly empty variable, means it uses only credentials already in its environment. |
+| `config/voice-id`         | `FM_VOICE_ID`        | Output voice id, optional, `matthew` when unset.                                                                                                    |
+| `config/voice-read-scope` | none                 | `counts` (the default, and what an absent file means) or `full`; see [`docs/voice-relay.md`](voice-relay.md) for what each scope may say.           |
+| `config/voice-read-deny`  | none                 | One plain case-insensitive substring per line; a matching open item is withheld from every list and reduced to a count.                             |
+| `config/inbox-region`     | `FM_INBOX_REGION`    | AWS region for `fm-inbox.sh say` and `ask`.                                                                                                         |
+| `config/inbox-stt-model`  | `FM_INBOX_STT_MODEL` | Speech-to-text model id, required by `fm-inbox.sh say`.                                                                                             |
+| `config/inbox-ask-model`  | `FM_INBOX_ASK_MODEL` | Side-question model id, required by `fm-inbox.sh ask`.                                                                                              |
+| `config/inbox-profile`    | `FM_INBOX_PROFILE`   | AWS profile for those two calls; absent, or an explicitly empty variable, means whatever credentials are already in the environment.                |
 
 Each account, model and voice file above is read as its first line that is not blank and not a `#` comment, so a comment above the value is fine.
 The two read files are parsed differently: `config/voice-read-scope` must hold the bare word and nothing but blank space around it, so a comment header there refuses instead of being skipped, while every line of `config/voice-read-deny` that is not blank and not a `#` comment is one more substring.
