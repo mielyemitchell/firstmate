@@ -9,12 +9,16 @@
 # Enter - the first sleep fm_tmux_submit_core makes. These tests pin the
 # settle-SELECTION matrix hermetically (stubbed tmux + sleep, no real agent):
 #
+# The settle matrix governs the TYPED plane (harness-native invocations and
+# explicit backend targets); a task-selector message that is not an invocation
+# rides the durable inbox instead, where only the constant doorbell (fixed
+# fast settle) touches the terminal:
 #   /...            -> 1.2  (universal; `/` only starts a command, never plain text)
 #   $... to codex   -> 1.2  (scoped: codex opens a `$<skill>` popup)
-#   $... to claude  -> 0.3  (NOT codex: `$` commonly starts plain text "$5", "$HOME")
+#   $... to claude  -> inbox plane (NOT codex: `$` commonly starts plain text)
 #   $... explicit   -> 0.3  (session:window target has no meta -> harness unknown
-#                            -> non-codex safe default)
-#   plain text      -> 0.3  (fast path)
+#                            -> non-codex safe default, still typed)
+#   plain text      -> inbox plane for a selector, 0.3 typed for an explicit target
 #
 # The popup-settle is the FIRST sleep recorded: fm_tmux_submit_core types the text,
 # then `sleep "$settle"`, then the Enter-retry loop (sleep 0.4 each) and finally
@@ -50,40 +54,14 @@ set -u
 case "${1:-}" in
   send-keys) exit 0 ;;
   display-message)
-    for a in "$@"; do case "$a" in *cursor_y*) printf '0\n'; exit 0 ;; esac; done
+    for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
     printf 'fakepane\n'; exit 0 ;;
-  capture-pane) printf '\xe2\x94\x82 \xe2\x94\x82\n'; exit 0 ;;
+  capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
   list-windows) exit 0 ;;
 esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  cat > "$fb/sleep" <<'SH'
-#!/usr/bin/env bash
-printf '%s\n' "${1:-}" >> "$FM_SLEEP_LOG"
-exit 0
-SH
-  chmod +x "$fb/sleep"
-  printf '%s\n' "$fb"
-}
-
-make_herdr_stubs() {  # <dir> -> echoes fakebin dir
-  local dir=$1 fb="$1/fakebin"
-  mkdir -p "$fb"
-  cat > "$fb/herdr" <<'SH'
-#!/usr/bin/env bash
-set -u
-{
-  printf 'HERDR_SESSION=%s' "${HERDR_SESSION:-}"
-  for a in "$@"; do printf '\x1f%s' "$a"; done
-  printf '\n'
-} >> "$FM_HERDR_LOG"
-if [ "${1:-}" = status ] && [ "${2:-}" = --json ]; then
-  printf '{"client":{"version":"0.7.2","protocol":16},"server":{"running":true}}\n'
-fi
-exit 0
-SH
-  chmod +x "$fb/herdr"
   cat > "$fb/sleep" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "${1:-}" >> "$FM_SLEEP_LOG"
@@ -135,6 +113,30 @@ first_settle() {  # <expected> <label> <harness|--explicit> <message> [selector-
   pass "fm-send popup-settle: $label -> ${expected}s"
 }
 
+# rides_inbox <label> <harness> <message>: a task-selector message that is NOT
+# a harness-native invocation no longer types its payload at all - it rides
+# the durable inbox, so no popup-settle question exists for it. Assert the
+# routing (record enqueued, payload never typed) and that the doorbell's own
+# fixed fast settle (0.3) is the first sleep, so the codex-scoped `$` rule can
+# never regress into slowing plain text again.
+rides_inbox() {  # <label> <harness> <message>
+  local label=$1 harness=$2 msg=$3
+  local dir fb log home rc first
+  dir="$TMP_ROOT/case-$RANDOM"; mkdir -p "$dir/state"
+  fb=$(make_stubs "$dir"); log="$dir/sleep.log"; home="$dir"
+  fm_write_meta "$home/state/popupcase.meta" "window=sess:win" "harness=$harness"
+  : > "$log"
+  env FM_SEND_SETTLE=0 PATH="$fb:$PATH" \
+    FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SLEEP_LOG="$log" \
+    "$SEND" fm-popupcase "$msg" 2>/dev/null; rc=$?
+  expect_code 0 "$rc" "$label: send should succeed"
+  grep -qF -- "$msg" "$home/state/popupcase.inbox/001.msg" \
+    || fail "$label: the steer should be enqueued in the task inbox"
+  first=$(head -1 "$log")
+  [ "$first" = "0.3" ] || fail "$label: the doorbell ring should keep the fast settle, got '$first'"$'\n'"--- sleeps ---"$'\n'"$(cat "$log")"
+  pass "fm-send popup-settle: $label -> inbox plane, fast doorbell"
+}
+
 # Codex `$<skill>` gets the long settle so its `$` popup clears (the fix).
 first_settle 1.2 'codex $skill -> long settle' codex '$no-mistakes'
 
@@ -142,12 +144,13 @@ first_settle 1.2 'codex $skill -> long settle' codex '$no-mistakes'
 # task id, not only by the legacy `fm-<id>` window label.
 first_settle 1.2 'codex $skill exact task id -> long settle' codex '$no-mistakes' exact
 
-# Same `$` message to claude keeps the fast path: `$` is ordinary text there.
-first_settle 0.3 'claude $-message -> fast path' claude '$no-mistakes'
+# Same `$` message to claude is ordinary text there: it rides the inbox and
+# only the fast doorbell touches the terminal.
+rides_inbox 'claude $-message' claude '$no-mistakes'
 
-# `$`-prefixed plain text to claude (a price) must NOT popup-settle - the regression
-# the codex scoping exists to prevent.
-first_settle 0.3 'claude "$5/month" -> fast path' claude '$5/month is cheap'
+# `$`-prefixed plain text to claude (a price) is likewise ordinary text - the
+# regression the codex scoping exists to prevent can no longer slow it.
+rides_inbox 'claude "$5/month"' claude '$5/month is cheap'
 
 # An explicit session:window target has no meta, so the harness is unknown and
 # treated as non-codex: the safe default keeps the fast path even for a `$` message.
@@ -160,29 +163,5 @@ first_settle 1.2 'claude /command -> long settle (slash unchanged)' claude '/no-
 # A `/` to codex is likewise still the long settle (slash path untouched).
 first_settle 1.2 'codex /command -> long settle (slash unchanged)' codex '/help'
 
-# Plain text to codex takes the fast path - the codex scope is `$`-prefixed only.
-first_settle 0.3 'codex plain text -> fast path' codex 'just a normal steer'
-
-test_codex_dollar_unknown_submit_verdict_fails_loudly() {
-  local dir fb home log sleeps err rc got enter_count
-  dir="$TMP_ROOT/codex-dollar-unknown"; mkdir -p "$dir/state"
-  fb=$(make_herdr_stubs "$dir"); home="$dir"; log="$dir/herdr.log"; sleeps="$dir/sleep.log"; err="$dir/send.err"
-  : > "$log"; : > "$sleeps"
-  fm_write_meta "$home/state/codexherdr.meta" \
-    "window=default:w1:p2" "backend=herdr" "harness=codex" "kind=ship"
-
-  env FM_SEND_SETTLE=0 PATH="$fb:$PATH" \
-    FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_HERDR_LOG="$log" FM_SLEEP_LOG="$sleeps" \
-    "$SEND" fm-codexherdr '$no-mistakes' >/dev/null 2>"$err"; rc=$?
-  [ "$rc" -ne 0 ] || fail "codex \$skill over herdr must fail when submit verification is unknown"
-  got=$(cat "$log")
-  assert_contains "$got" $'\x1f''pane'$'\x1f''send-text'$'\x1f''w1:p2'$'\x1f''$no-mistakes' \
-    "codex dollar test did not type the literal skill invocation"
-  enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
-  [ "$enter_count" -ge 1 ] || fail "codex dollar test never attempted Enter"
-  assert_contains "$(cat "$err")" "could not be verified" \
-    "codex dollar unknown-verdict failure should explain that submission was not verified"
-  pass "fm-send popup-settle: codex \$skill over herdr fails loudly on unknown submit verification"
-}
-
-test_codex_dollar_unknown_submit_verdict_fails_loudly
+# Plain text to codex rides the inbox - the codex scope is `$`-prefixed only.
+rides_inbox 'codex plain text' codex 'just a normal steer'

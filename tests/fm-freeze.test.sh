@@ -87,7 +87,7 @@ test_spawn_bypass_is_explicit_one_command() {
   FM_HOME="$home" "$FREEZE" on "parked" >/dev/null
 
   status=0
-  out=$(FM_HOME="$home" FM_BACKEND=tmux FM_SPAWN_NO_GUARD=1 FM_FLEET_FREEZE_BYPASS=1 "$SPAWN" bypass-task projects/none codex 2>&1) || status=$?
+  out=$(FM_HOME="$home" FM_BACKEND=tmux FM_SPAWN_NO_GUARD=1 FM_FLEET_FREEZE_BYPASS=1 "$SPAWN" bypass-task projects/none --mode direct-PR --yolo off --harness codex 2>&1) || status=$?
 
   [ "$status" -ne 0 ] || fail "bypassed spawn with missing brief should still fail normal validation"
   assert_not_contains "$out" "fleet frozen" "explicit bypass did not bypass freeze guard"
